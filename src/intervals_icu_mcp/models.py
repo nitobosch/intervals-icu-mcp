@@ -402,12 +402,22 @@ class CurveSet(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    curves: list[CurveData] = Field(default_factory=lambda: list[CurveData](), alias="list")
+    curves: list[CurveData] = Field(
+        default_factory=lambda: list[CurveData](),
+        alias="list",
+    )
+
+    activities: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("curves", mode="before")
     @classmethod
     def _coerce_curves(cls, v: Any) -> list[Any]:
         return v or []
+
+    @field_validator("activities", mode="before")
+    @classmethod
+    def _coerce_activities(cls, v: Any) -> dict[str, Any]:
+        return v or {}
 
 
 # ==================== Training Plan Models ====================

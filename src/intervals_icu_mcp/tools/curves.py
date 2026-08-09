@@ -40,7 +40,6 @@ def _resolve_period(days_back: int | None, time_period: str | None) -> tuple[str
         )
     return "90d", "90_days"
 
-
 async def get_hr_curves(
     sport_type: Annotated[str, "Sport type (e.g., Ride, Run, Swim, VirtualRide)"] = "Ride",
     days_back: Annotated[int | None, "Number of days to analyze (optional)"] = None,
@@ -51,11 +50,14 @@ async def get_hr_curves(
     athlete_id: Annotated[str | None, "Athlete ID (for coaches managing multiple athletes)"] = None,
     ctx: Context | None = None,
 ) -> str:
-    """Fetch the HR-vs-duration curve — best (highest) sustained HR across durations from 5s up to 1h, aggregated over the chosen window.
+    """Fetch the HR-vs-duration curve.
 
-    Use for cardiovascular-fitness trends and HR-zone calibration. For
-    time-in-zone *distribution* within a single activity, use
-    get_hr_histogram instead.
+    Returns the best sustained heart-rate efforts across representative
+    durations, aggregated over the chosen time window.
+
+    This tool reports HR-curve data only. It does not calculate or recommend
+    heart-rate training zones. Use get_sport_settings for the athlete's
+    configured HR zones.
     """
     assert ctx is not None
     config: ICUConfig = await ctx.get_state("config")
@@ -64,19 +66,27 @@ async def get_hr_curves(
         period = _resolve_period(days_back, time_period)
         if isinstance(period, str):
             return period
+
         curves, period_label = period
 
         async with ICUClient(config) as client:
             curve_set = await client.get_hr_curves(
-                athlete_id=athlete_id, curves=curves, type=sport_type
+                athlete_id=athlete_id,
+                curves=curves,
+                type=sport_type,
             )
 
             if not curve_set.curves or not curve_set.curves[0].values:
                 return ResponseBuilder.build_response(
-                    data={"hr_curve": [], "period": period_label},
+                    data={
+                        "hr_curve": [],
+                        "period": period_label,
+                    },
                     metadata={
-                        "message": f"No HR curve data available for {period_label}. "
-                        "Complete some activities with heart rate to build your HR curve."
+                        "message": (
+                            f"No HR curve data available for {period_label}. "
+                            "Complete some activities with heart rate to build your HR curve."
+                        )
                     },
                 )
 
@@ -84,7 +94,7 @@ async def get_hr_curves(
             secs = curve.secs
             vals = curve.values
 
-            # Key durations to highlight (in seconds)
+            # Representative durations to expose to the LLM.
             key_durations = {
                 5: "5_sec",
                 15: "15_sec",
@@ -97,29 +107,52 @@ async def get_hr_curves(
                 3600: "1_hour",
             }
 
-            # Find data points for key durations
             peak_efforts: dict[str, dict[str, Any]] = {}
+
             for target_secs, label in key_durations.items():
                 result = _find_value_at_duration(secs, vals, target_secs)
-                if result:
-                    actual_secs, bpm = result
-                    effort: dict[str, Any] = {
-                        "bpm": bpm,
-                        "duration_seconds": actual_secs,
-                    }
-                    idx = secs.index(actual_secs)
-                    if idx < len(curve.activity_id) and curve.activity_id[idx]:
-                        effort["activity_id"] = curve.activity_id[idx]
-                    peak_efforts[label] = effort
 
-            # Calculate summary statistics
+                if not result:
+                    continue
+
+                actual_secs, bpm = result
+
+                effort: dict[str, Any] = {
+                    "bpm": bpm,
+                    "duration_seconds": actual_secs,
+                }
+
+                idx = secs.index(actual_secs)
+
+                if idx < len(curve.activity_id):
+                    activity_id = curve.activity_id[idx]
+
+                    if activity_id:
+                        effort["activity_id"] = activity_id
+
+                        activity = curve_set.activities.get(activity_id)
+
+                        if activity:
+                            activity_date = activity.get("start_date_local")
+                            activity_name = activity.get("name")
+
+                            if activity_date:
+                                effort["activity_date"] = activity_date
+
+                            if activity_name:
+                                effort["activity_name"] = activity_name
+
+                peak_efforts[label] = effort
+
             max_hr = max(vals) if vals else 0
             max_hr_idx = vals.index(max_hr) if vals else 0
 
             summary: dict[str, Any] = {
                 "total_data_points": len(secs),
                 "max_hr_bpm": max_hr,
-                "max_hr_duration_seconds": secs[max_hr_idx] if secs else 0,
+                "max_hr_duration_seconds": (
+                    secs[max_hr_idx] if secs else 0
+                ),
                 "duration_range": {
                     "min_seconds": min(secs) if secs else 0,
                     "max_seconds": max(secs) if secs else 0,
@@ -127,30 +160,10 @@ async def get_hr_curves(
             }
 
             if curve.start_date_local and curve.end_date_local:
-                summary["effort_date_range"] = {
-                    "oldest": curve.start_date_local,
-                    "newest": curve.end_date_local,
+                summary["curve_window"] = {
+                    "start": curve.start_date_local,
+                    "end": curve.end_date_local,
                 }
-
-            # Calculate HR zones (based on max HR if available)
-            hr_zones: dict[str, dict[str, int]] | None = None
-            if max_hr > 0:
-                zones = {
-                    "zone_1_recovery": (0.50, 0.60),
-                    "zone_2_endurance": (0.60, 0.70),
-                    "zone_3_tempo": (0.70, 0.80),
-                    "zone_4_threshold": (0.80, 0.90),
-                    "zone_5_vo2max": (0.90, 1.00),
-                }
-
-                hr_zones = {}
-                for zone_name, (low, high) in zones.items():
-                    hr_zones[zone_name] = {
-                        "min_bpm": int(max_hr * low),
-                        "max_bpm": int(max_hr * high),
-                        "min_percent_max": int(low * 100),
-                        "max_percent_max": int(high * 100),
-                    }
 
             result_data: dict[str, Any] = {
                 "period": period_label,
@@ -158,21 +171,22 @@ async def get_hr_curves(
                 "summary": summary,
             }
 
-            if hr_zones:
-                result_data["hr_zones"] = hr_zones
-
             return ResponseBuilder.build_response(
                 data=result_data,
                 query_type="hr_curves",
             )
 
     except ICUAPIError as e:
-        return ResponseBuilder.build_error_response(e.message, error_type="api_error")
-    except Exception as e:
         return ResponseBuilder.build_error_response(
-            f"Unexpected error: {str(e)}", error_type="internal_error"
+            e.message,
+            error_type="api_error",
         )
 
+    except Exception as e:
+        return ResponseBuilder.build_error_response(
+            f"Unexpected error: {str(e)}",
+            error_type="internal_error",
+        )
 
 async def get_pace_curves(
     sport_type: Annotated[str, "Sport type (e.g., Run, Swim)"] = "Run",
