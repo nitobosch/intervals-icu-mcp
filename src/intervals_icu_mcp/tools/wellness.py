@@ -27,8 +27,67 @@ WELLNESS_SCALES: dict[str, str] = {
     "readiness": "0-100 (higher is better)",
 }
 
+# Garmin Body Battery is stored in Intervals.icu as athlete-defined wellness
+# fields, so the API only returns it when those field codes are requested.
+CUSTOM_WELLNESS_FIELDS: list[str] = [
+    "id",
+    "BodyBatteryMin",
+    "BodyBatteryMax",
+]
 
-def _format_wellness_record(record: Any, date_id: str) -> dict[str, Any]:
+
+def _get_custom_wellness_value(
+    record: Any,
+    custom_record: Any | None,
+    field: str,
+) -> Any:
+    """Return an athlete-defined wellness value from an enriched or base record."""
+    for source in (custom_record, record):
+        if source is None:
+            continue
+
+        # Wellness uses Pydantic extra="allow", therefore athlete-defined API
+        # fields are preserved in model_extra instead of being discarded.
+        model_extra: dict[str, Any] = getattr(source, "model_extra", None) or {}
+        if field in model_extra:
+            return model_extra[field]
+
+        # Keep this fallback in case a future model version declares the field
+        # explicitly instead of leaving it in model_extra.
+        value = getattr(source, field, None)
+        if value is not None:
+            return value
+
+    return None
+
+
+async def _get_custom_wellness_by_date(
+    client: ICUClient,
+    athlete_id: str | None,
+    oldest: str,
+    newest: str,
+) -> dict[str, Any]:
+    """Fetch optional athlete-defined wellness fields, indexed by date."""
+    try:
+        records = await client.get_wellness(
+            athlete_id=athlete_id,
+            oldest=oldest,
+            newest=newest,
+            fields=CUSTOM_WELLNESS_FIELDS,
+        )
+    except ICUAPIError:
+        # Custom wellness fields are optional. Failure to retrieve them must not
+        # make the standard wellness tools unusable.
+        return {}
+
+    return {record.id: record for record in records}
+
+
+def _format_wellness_record(
+    record: Any,
+    date_id: str,
+    custom_record: Any | None = None,
+) -> dict[str, Any]:
     """Format a wellness record object into a structured dictionary."""
     day_data: dict[str, Any] = {"date": date_id}
 
@@ -57,6 +116,25 @@ def _format_wellness_record(record: Any, date_id: str) -> dict[str, Any]:
         heart["baevsky_si"] = round(record.baevsky_si, 1)
     if heart:
         day_data["heart"] = heart
+
+    # Garmin Body Battery (Intervals.icu athlete-defined wellness fields)
+    body_battery: dict[str, Any] = {}
+    body_battery_min = _get_custom_wellness_value(
+        record,
+        custom_record,
+        "BodyBatteryMin",
+    )
+    body_battery_max = _get_custom_wellness_value(
+        record,
+        custom_record,
+        "BodyBatteryMax",
+    )
+    if body_battery_min is not None:
+        body_battery["min"] = body_battery_min
+    if body_battery_max is not None:
+        body_battery["max"] = body_battery_max
+    if body_battery:
+        day_data["body_battery"] = body_battery
 
     # Subjective feelings
     subjective: dict[str, Any] = {}
@@ -171,8 +249,18 @@ def _format_wellness_record(record: Any, date_id: str) -> dict[str, Any]:
     # Athlete-defined wellness fields are not part of the static Wellness
     # schema. Pydantic keeps them in model_extra (Wellness uses extra="allow");
     # surface them verbatim instead of silently dropping them while formatting.
-    model_extra: dict[str, Any] = getattr(record, "model_extra", None) or {}
-    custom_fields = {name: value for name, value in model_extra.items() if value is not None}
+    # Body Battery is exposed above in a dedicated structure, so exclude it here
+    # to avoid duplicating the same values in the response.
+    custom_fields: dict[str, Any] = {}
+    for source in (record, custom_record):
+        if source is None:
+            continue
+        model_extra: dict[str, Any] = getattr(source, "model_extra", None) or {}
+        for name, value in model_extra.items():
+            if name in {"BodyBatteryMin", "BodyBatteryMax"}:
+                continue
+            if value is not None:
+                custom_fields[name] = value
     if custom_fields:
         day_data["custom_fields"] = custom_fields
 
@@ -229,12 +317,25 @@ async def get_wellness_data(
                     metadata={"message": f"No wellness data found for the last {days_back} days"},
                 )
 
+            custom_wellness_by_date = await _get_custom_wellness_by_date(
+                client=client,
+                athlete_id=athlete_id,
+                oldest=oldest,
+                newest=newest,
+            )
+
             # Sort by date (most recent first)
             wellness_records.sort(key=lambda x: x.id, reverse=True)
 
             wellness_data: list[dict[str, Any]] = []
             for record in wellness_records:
-                wellness_data.append(_format_wellness_record(record, record.id))
+                wellness_data.append(
+                    _format_wellness_record(
+                        record,
+                        record.id,
+                        custom_wellness_by_date.get(record.id),
+                    )
+                )
 
             # Calculate trends if we have multiple days
             trends: dict[str, Any] = {}
@@ -322,8 +423,18 @@ async def get_wellness_for_date(
     try:
         async with ICUClient(config) as client:
             wellness = await client.get_wellness_for_date(date=date, athlete_id=athlete_id)
+            custom_wellness_by_date = await _get_custom_wellness_by_date(
+                client=client,
+                athlete_id=athlete_id,
+                oldest=date,
+                newest=date,
+            )
 
-            wellness_data = _format_wellness_record(wellness, date)
+            wellness_data = _format_wellness_record(
+                wellness,
+                date,
+                custom_wellness_by_date.get(date),
+            )
 
             metadata: dict[str, Any] = {}
             scales = _scales_for_records([wellness_data])
