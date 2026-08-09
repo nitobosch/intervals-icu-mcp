@@ -8,6 +8,7 @@ from fastmcp import Context
 from ..auth import ICUConfig
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
+from .event_management import _workout_parse_info
 
 
 async def get_calendar_events(
@@ -327,6 +328,11 @@ async def get_event(
                 event_data["color"] = event.color
             if event.external_id:
                 event_data["external_id"] = event.external_id
+
+            # Structured workout parse status
+            parse_info = _workout_parse_info(event)
+            if parse_info:
+                event_data.update(parse_info)
 
             return ResponseBuilder.build_response(
                 data=event_data,
