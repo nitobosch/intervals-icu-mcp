@@ -31,10 +31,10 @@ class TestInMemoryTransport:
             assert client.is_connected()
 
     async def test_all_default_mode_tools_registered(self):
-        """Default delete_mode=safe registers 59 tools (3 destructive tools gated)."""
+        """Default delete_mode=safe registers 63 tools (including 4 read-only Strava tools)."""
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            assert len(tools) == 59
+            assert len(tools) == 63
             names = {t.name for t in tools}
             # Spot-check tools from different modules / tiers
             assert "icu_get_recent_activities" in names
@@ -59,8 +59,14 @@ class TestInMemoryTransport:
         """Every tool follows the naming convention documented in the README."""
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            non_prefixed = [t.name for t in tools if not t.name.startswith("icu_")]
-            assert non_prefixed == []
+        non_prefixed = {t.name for t in tools if not t.name.startswith("icu_")}
+
+        assert non_prefixed == {
+            "strava_get_starred_segments",
+            "strava_get_segment",
+            "strava_get_segment_efforts",
+            "strava_get_segment_effort_streams",
+        }
 
     async def test_destructive_tools_carry_destructive_hint(self):
         """MCP tool annotations communicate risk to the LLM."""
@@ -202,5 +208,5 @@ class TestHTTPTransport:
                 tools_body = (await tools_resp.aread()).decode()
                 tools_payload = self._parse_sse_response(tools_body)
                 tool_names = {t["name"] for t in tools_payload["result"]["tools"]}
-                assert len(tool_names) == 59  # safe mode default
+                assert len(tool_names) == 63  # safe mode default + 4 Strava tools
                 assert "icu_get_recent_activities" in tool_names

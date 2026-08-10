@@ -26,6 +26,14 @@ class ICUConfig(BaseSettings):
     intervals_icu_athlete_id: str = ""
     intervals_icu_delete_mode: DeleteMode = "safe"
 
+    # Optional direct Strava API integration.
+    # The environment refresh token is only the initial seed. Rotated OAuth
+    # tokens are persisted separately so container restarts use the newest token.
+    strava_client_id: str = ""
+    strava_client_secret: str = ""
+    strava_refresh_token: str = ""
+    strava_token_store: str = "/data/strava/tokens.json"
+
     @field_validator("intervals_icu_delete_mode", mode="before")
     @classmethod
     def _normalize_delete_mode(cls, v: object) -> str:

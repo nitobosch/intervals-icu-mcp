@@ -92,8 +92,58 @@ from .tools.sport_settings import (
     get_sport_settings,
     update_sport_settings,
 )
+from .tools.strava import (
+    get_segment,
+    get_segment_effort_streams,
+    get_segment_efforts,
+    get_starred_segments,
+)
 from .tools.wellness import get_wellness_data, get_wellness_for_date, update_wellness
 from .tools.workout_library import get_workout_library, get_workouts_in_folder
+
+# Register direct Strava tools
+
+mcp.tool(
+    name="strava_get_starred_segments",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_starred_segments)
+
+
+mcp.tool(
+    name="strava_get_segment",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_segment)
+
+mcp.tool(
+    name="strava_get_segment_efforts",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_segment_efforts)
+
+mcp.tool(
+    name="strava_get_segment_effort_streams",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_segment_effort_streams)
+
 
 # Register activity tools
 mcp.tool(

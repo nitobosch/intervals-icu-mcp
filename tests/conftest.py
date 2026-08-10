@@ -12,7 +12,7 @@ import dotenv
 # leak happens before per-test fixtures can intervene. We neutralize at
 # conftest module-load time, BEFORE importing any first-party module that
 # might do `from dotenv import load_dotenv` and capture the real binding.
-for _key in [k for k in os.environ if k.startswith("INTERVALS_ICU_")]:
+for _key in [k for k in os.environ if k.startswith(("INTERVALS_ICU_", "STRAVA_"))]:
     del os.environ[_key]
 
 
