@@ -283,6 +283,516 @@ def _scales_for_records(records: list[dict[str, Any]]) -> dict[str, str]:
     return {k: WELLNESS_SCALES[k] for k in present}
 
 
+
+def _recovery_metric_value(
+    record: Any | None,
+    custom_record: Any | None,
+    metric: str,
+) -> Any:
+    """Return one raw recovery metric without converting missing values to zero."""
+    if metric == "body_battery_min":
+        return _get_custom_wellness_value(
+            record,
+            custom_record,
+            "BodyBatteryMin",
+        )
+
+    if metric == "body_battery_max":
+        return _get_custom_wellness_value(
+            record,
+            custom_record,
+            "BodyBatteryMax",
+        )
+
+    if record is None:
+        return None
+
+    field_by_metric = {
+        "sleep_duration": "sleep_secs",
+        "sleep_score": "sleep_score",
+        "sleep_quality": "sleep_quality",
+        "hrv": "hrv",
+        "resting_hr": "resting_hr",
+    }
+
+    field = field_by_metric.get(metric)
+    if field is None:
+        return None
+
+    return getattr(record, field, None)
+
+
+def _numeric_values_for_dates(
+    metric: str,
+    date_ids: list[str],
+    records_by_date: dict[str, Any],
+    custom_by_date: dict[str, Any],
+) -> list[float]:
+    """Return available numeric values for explicit calendar dates."""
+    values: list[float] = []
+
+    for date_id in date_ids:
+        value = _recovery_metric_value(
+            records_by_date.get(date_id),
+            custom_by_date.get(date_id),
+            metric,
+        )
+
+        if value is not None and isinstance(value, (int, float)):
+            values.append(float(value))
+
+    return values
+
+
+def _average(
+    values: list[float],
+    digits: int = 1,
+) -> float | None:
+    """Average available values only; missing values are never treated as zero."""
+    if not values:
+        return None
+
+    return round(sum(values) / len(values), digits)
+
+
+def _baseline_comparison(
+    metric: str,
+    recent_dates: list[str],
+    previous_dates: list[str],
+    records_by_date: dict[str, Any],
+    custom_by_date: dict[str, Any],
+    digits: int = 1,
+) -> dict[str, float | None]:
+    """Compare equal recent and previous calendar windows for one metric."""
+    recent_values = _numeric_values_for_dates(
+        metric,
+        recent_dates,
+        records_by_date,
+        custom_by_date,
+    )
+
+    previous_values = _numeric_values_for_dates(
+        metric,
+        previous_dates,
+        records_by_date,
+        custom_by_date,
+    )
+
+    recent_average = _average(recent_values, digits)
+    previous_average = _average(previous_values, digits)
+
+    change: float | None = None
+
+    if recent_average is not None and previous_average is not None:
+        change = round(
+            recent_average - previous_average,
+            digits,
+        )
+
+    return {
+        "recent_average": recent_average,
+        "previous_average": previous_average,
+        "change": change,
+    }
+
+
+def _metric_coverage(
+    metric: str,
+    recent_dates: list[str],
+    previous_dates: list[str],
+    records_by_date: dict[str, Any],
+    custom_by_date: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe how much real data backs a recovery metric."""
+
+    def available(date_id: str) -> bool:
+        value = _recovery_metric_value(
+            records_by_date.get(date_id),
+            custom_by_date.get(date_id),
+            metric,
+        )
+        return value is not None
+
+    recent_present = [
+        date_id
+        for date_id in recent_dates
+        if available(date_id)
+    ]
+
+    previous_present = [
+        date_id
+        for date_id in previous_dates
+        if available(date_id)
+    ]
+
+    all_dates = previous_dates + recent_dates
+
+    return {
+        "recent_available": len(recent_present),
+        "recent_expected": len(recent_dates),
+        "previous_available": len(previous_present),
+        "previous_expected": len(previous_dates),
+        "total_available": len(recent_present) + len(previous_present),
+        "total_expected": len(all_dates),
+        "missing_dates": [
+            date_id
+            for date_id in all_dates
+            if not available(date_id)
+        ],
+    }
+
+
+async def get_recovery_analysis(
+    comparison_window_days: Annotated[
+        int,
+        (
+            "Calendar days per comparison block. Default 7 means "
+            "recent 7 days versus previous 7 days."
+        ),
+    ] = 7,
+    reference_date: Annotated[
+        str | None,
+        "Reference date in YYYY-MM-DD format. Defaults to today.",
+    ] = None,
+    athlete_id: Annotated[
+        str | None,
+        "Athlete ID (for coaches managing multiple athletes)",
+    ] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Build a deterministic recovery baseline from Intervals.icu wellness data.
+
+    Two equal calendar windows are compared. Missing values are excluded from
+    averages and are never converted to zero.
+
+    This tool deliberately does not generate a recovery/readiness score,
+    physiological diagnosis, or training recommendation.
+    """
+    assert ctx is not None
+    config: ICUConfig = await ctx.get_state("config")
+
+    if comparison_window_days < 2 or comparison_window_days > 30:
+        return ResponseBuilder.build_error_response(
+            "comparison_window_days must be between 2 and 30.",
+            error_type="validation_error",
+        )
+
+    if reference_date is None:
+        reference_dt = datetime.now()
+    else:
+        try:
+            reference_dt = datetime.strptime(
+                reference_date,
+                "%Y-%m-%d",
+            )
+        except ValueError:
+            return ResponseBuilder.build_error_response(
+                "Invalid reference_date format. Please use YYYY-MM-DD format.",
+                error_type="validation_error",
+            )
+
+    reference_date_id = reference_dt.strftime("%Y-%m-%d")
+
+    recent_start_dt = reference_dt - timedelta(
+        days=comparison_window_days - 1
+    )
+
+    previous_end_dt = recent_start_dt - timedelta(days=1)
+
+    previous_start_dt = previous_end_dt - timedelta(
+        days=comparison_window_days - 1
+    )
+
+    recent_dates = [
+        (
+            recent_start_dt + timedelta(days=i)
+        ).strftime("%Y-%m-%d")
+        for i in range(comparison_window_days)
+    ]
+
+    previous_dates = [
+        (
+            previous_start_dt + timedelta(days=i)
+        ).strftime("%Y-%m-%d")
+        for i in range(comparison_window_days)
+    ]
+
+    all_dates = previous_dates + recent_dates
+
+    oldest = previous_dates[0]
+    newest = recent_dates[-1]
+
+    try:
+        async with ICUClient(config) as client:
+            wellness_records = await client.get_wellness(
+                athlete_id=athlete_id,
+                oldest=oldest,
+                newest=newest,
+            )
+
+            custom_by_date = await _get_custom_wellness_by_date(
+                client=client,
+                athlete_id=athlete_id,
+                oldest=oldest,
+                newest=newest,
+            )
+
+        records_by_date = {
+            record.id: record
+            for record in wellness_records
+        }
+
+        today_record = records_by_date.get(reference_date_id)
+        today_custom = custom_by_date.get(reference_date_id)
+
+        sleep_seconds = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "sleep_duration",
+        )
+
+        sleep_score = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "sleep_score",
+        )
+
+        sleep_quality = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "sleep_quality",
+        )
+
+        hrv = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "hrv",
+        )
+
+        resting_hr = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "resting_hr",
+        )
+
+        body_battery_min = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "body_battery_min",
+        )
+
+        body_battery_max = _recovery_metric_value(
+            today_record,
+            today_custom,
+            "body_battery_max",
+        )
+
+        today = {
+            "date": reference_date_id,
+            "sleep_duration": {
+                "seconds": sleep_seconds,
+                "hours": (
+                    round(float(sleep_seconds) / 3600, 2)
+                    if sleep_seconds is not None
+                    else None
+                ),
+                "source_field": "sleepSecs",
+            },
+            "sleep_score": sleep_score,
+            "sleep_quality": sleep_quality,
+            "hrv": {
+                "value_ms": hrv,
+            },
+            "resting_hr": {
+                "value_bpm": resting_hr,
+            },
+            "body_battery": {
+                "min": body_battery_min,
+                "max": body_battery_max,
+            },
+        }
+
+        hrv_baseline = _baseline_comparison(
+            "hrv",
+            recent_dates,
+            previous_dates,
+            records_by_date,
+            custom_by_date,
+        )
+
+        resting_hr_baseline = _baseline_comparison(
+            "resting_hr",
+            recent_dates,
+            previous_dates,
+            records_by_date,
+            custom_by_date,
+        )
+
+        sleep_score_baseline = _baseline_comparison(
+            "sleep_score",
+            recent_dates,
+            previous_dates,
+            records_by_date,
+            custom_by_date,
+        )
+
+        recent_sleep_values = _numeric_values_for_dates(
+            "sleep_duration",
+            recent_dates,
+            records_by_date,
+            custom_by_date,
+        )
+
+        previous_sleep_values = _numeric_values_for_dates(
+            "sleep_duration",
+            previous_dates,
+            records_by_date,
+            custom_by_date,
+        )
+
+        recent_sleep_seconds = _average(
+            recent_sleep_values,
+            0,
+        )
+
+        previous_sleep_seconds = _average(
+            previous_sleep_values,
+            0,
+        )
+
+        sleep_change_seconds: float | None = None
+
+        if (
+            recent_sleep_seconds is not None
+            and previous_sleep_seconds is not None
+        ):
+            sleep_change_seconds = round(
+                recent_sleep_seconds - previous_sleep_seconds,
+                0,
+            )
+
+        sleep_duration_baseline = {
+            "recent_average_seconds": recent_sleep_seconds,
+            "recent_average_hours": (
+                round(recent_sleep_seconds / 3600, 2)
+                if recent_sleep_seconds is not None
+                else None
+            ),
+            "previous_average_seconds": previous_sleep_seconds,
+            "previous_average_hours": (
+                round(previous_sleep_seconds / 3600, 2)
+                if previous_sleep_seconds is not None
+                else None
+            ),
+            "change_seconds": sleep_change_seconds,
+            "change_hours": (
+                round(sleep_change_seconds / 3600, 2)
+                if sleep_change_seconds is not None
+                else None
+            ),
+        }
+
+        baseline = {
+            "hrv": hrv_baseline,
+            "resting_hr": resting_hr_baseline,
+            "sleep_duration": sleep_duration_baseline,
+            "sleep_score": sleep_score_baseline,
+        }
+
+        coverage = {
+            metric: _metric_coverage(
+                metric,
+                recent_dates,
+                previous_dates,
+                records_by_date,
+                custom_by_date,
+            )
+            for metric in (
+                "sleep_duration",
+                "sleep_score",
+                "sleep_quality",
+                "hrv",
+                "resting_hr",
+                "body_battery_min",
+                "body_battery_max",
+            )
+        }
+
+        today_fields = {
+            "sleep_duration": sleep_seconds,
+            "sleep_score": sleep_score,
+            "sleep_quality": sleep_quality,
+            "hrv": hrv,
+            "resting_hr": resting_hr,
+            "body_battery_min": body_battery_min,
+            "body_battery_max": body_battery_max,
+        }
+
+        data_quality = {
+            "requested_days": len(all_dates),
+            "records_available": len(records_by_date),
+            "nights_available": (
+                coverage["sleep_duration"]["total_available"]
+            ),
+            "coverage": coverage,
+            "missing_fields": [
+                name
+                for name, value in today_fields.items()
+                if value is None
+            ],
+        }
+
+        data = {
+            "source": "intervals_icu",
+            "period": {
+                "reference_date": reference_date_id,
+                "comparison_window_days": comparison_window_days,
+                "previous_start": previous_dates[0],
+                "previous_end": previous_dates[-1],
+                "recent_start": recent_dates[0],
+                "recent_end": recent_dates[-1],
+            },
+            "today": today,
+            "baseline": baseline,
+            "data_quality": data_quality,
+        }
+
+        return ResponseBuilder.build_response(
+            data=data,
+            metadata={
+                "method": (
+                    "Two equal calendar windows. Averages exclude "
+                    "null/missing values. "
+                    "change = recent_average - previous_average."
+                ),
+                "interpretation": (
+                    "No recovery score, physiological diagnosis, or "
+                    "training recommendation is generated by this tool."
+                ),
+                "sleep_duration_note": (
+                    "sleep_duration is derived from Intervals.icu sleepSecs. "
+                    "Its semantics may differ from Garmin effective sleep "
+                    "duration, so it must not be assumed to be identical to "
+                    "Garmin sleep time."
+                ),
+            },
+            query_type="recovery_analysis",
+        )
+
+    except ICUAPIError as e:
+        return ResponseBuilder.build_error_response(
+            e.message,
+            error_type="api_error",
+        )
+
+    except Exception as e:
+        return ResponseBuilder.build_error_response(
+            f"Unexpected error: {str(e)}",
+            error_type="internal_error",
+        )
+
+
+
 async def get_wellness_data(
     days_back: Annotated[int, "Number of days to look back"] = 7,
     athlete_id: Annotated[str | None, "Athlete ID (for coaches managing multiple athletes)"] = None,

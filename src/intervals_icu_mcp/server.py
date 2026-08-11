@@ -98,7 +98,12 @@ from .tools.strava import (
     get_segment_efforts,
     get_starred_segments,
 )
-from .tools.wellness import get_wellness_data, get_wellness_for_date, update_wellness
+from .tools.wellness import (
+    get_recovery_analysis,
+    get_wellness_data,
+    get_wellness_for_date,
+    update_wellness,
+)
 from .tools.workout_library import get_workout_library, get_workouts_in_folder
 
 # Register direct Strava tools
@@ -387,6 +392,16 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(get_wellness_data)
+mcp.tool(
+    name="icu_get_recovery_analysis",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_recovery_analysis)
+
 mcp.tool(
     name="icu_get_wellness_for_date",
     annotations={

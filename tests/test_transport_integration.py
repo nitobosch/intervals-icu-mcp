@@ -31,10 +31,10 @@ class TestInMemoryTransport:
             assert client.is_connected()
 
     async def test_all_default_mode_tools_registered(self):
-        """Default delete_mode=safe registers 63 tools (including 4 read-only Strava tools)."""
+        """Default delete_mode=safe registers 64 tools (including 4 read-only Strava tools)."""
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            assert len(tools) == 63
+            assert len(tools) == 64
             names = {t.name for t in tools}
             # Spot-check tools from different modules / tiers
             assert "icu_get_recent_activities" in names
@@ -208,5 +208,5 @@ class TestHTTPTransport:
                 tools_body = (await tools_resp.aread()).decode()
                 tools_payload = self._parse_sse_response(tools_body)
                 tool_names = {t["name"] for t in tools_payload["result"]["tools"]}
-                assert len(tool_names) == 63  # safe mode default + 4 Strava tools
+                assert len(tool_names) == 64  # safe mode default + 4 Strava tools
                 assert "icu_get_recent_activities" in tool_names

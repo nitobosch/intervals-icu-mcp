@@ -1,11 +1,13 @@
 """Tests for wellness tools."""
 
 import json
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from httpx import Response
 
 from intervals_icu_mcp.tools.wellness import (
+    get_recovery_analysis,
     get_wellness_data,
     get_wellness_for_date,
     update_wellness,
@@ -359,6 +361,151 @@ class TestWellnessTools:
             "ActiveEnergy": 0,
             "LeanBodyMass": 61.5,
         }
+
+
+    async def test_get_recovery_analysis_compares_equal_calendar_windows(
+        self,
+        mock_config,
+        respx_mock,
+    ):
+        """Recovery analysis uses equal windows, ignores nulls, and reports coverage."""
+        records = []
+        start = date(2026, 7, 29)
+
+        for i in range(14):
+            current = start + timedelta(days=i)
+            recent = i >= 7
+
+            record = {
+                "id": current.isoformat(),
+                "sleepSecs": 25200 if recent else 28800,
+                "sleepScore": 75 if recent else 80,
+                "sleepQuality": 2,
+                "hrv": 70 + (i - 7) if recent else 60 + i,
+                "restingHR": 47 - (i - 7) if recent else 50 - i,
+            }
+
+            if current.isoformat() == "2026-08-09":
+                record["sleepScore"] = None
+
+            if current.isoformat() == "2026-08-11":
+                record["BodyBatteryMin"] = 29
+                record["BodyBatteryMax"] = 89
+
+            records.append(record)
+
+        respx_mock.get("/athlete/i123456/wellness").mock(
+            return_value=Response(
+                200,
+                json=records,
+            )
+        )
+
+        mock_ctx = MagicMock()
+        mock_ctx.get_state = AsyncMock(
+            return_value=mock_config
+        )
+
+        result = await get_recovery_analysis(
+            comparison_window_days=7,
+            reference_date="2026-08-11",
+            ctx=mock_ctx,
+        )
+
+        response = json.loads(result)
+        data = response["data"]
+
+        assert data["source"] == "intervals_icu"
+
+        assert data["period"] == {
+            "reference_date": "2026-08-11",
+            "comparison_window_days": 7,
+            "previous_start": "2026-07-29",
+            "previous_end": "2026-08-04",
+            "recent_start": "2026-08-05",
+            "recent_end": "2026-08-11",
+        }
+
+        assert data["today"]["sleep_duration"] == {
+            "seconds": 25200,
+            "hours": 7.0,
+            "source_field": "sleepSecs",
+        }
+
+        assert data["today"]["sleep_score"] == 75
+        assert data["today"]["hrv"]["value_ms"] == 76
+        assert data["today"]["resting_hr"]["value_bpm"] == 41
+
+        assert data["today"]["body_battery"] == {
+            "min": 29,
+            "max": 89,
+        }
+
+        assert data["baseline"]["hrv"] == {
+            "recent_average": 73.0,
+            "previous_average": 63.0,
+            "change": 10.0,
+        }
+
+        assert data["baseline"]["resting_hr"] == {
+            "recent_average": 44.0,
+            "previous_average": 47.0,
+            "change": -3.0,
+        }
+
+        assert data["baseline"]["sleep_duration"] == {
+            "recent_average_seconds": 25200.0,
+            "recent_average_hours": 7.0,
+            "previous_average_seconds": 28800.0,
+            "previous_average_hours": 8.0,
+            "change_seconds": -3600.0,
+            "change_hours": -1.0,
+        }
+
+        assert data["baseline"]["sleep_score"] == {
+            "recent_average": 75.0,
+            "previous_average": 80.0,
+            "change": -5.0,
+        }
+
+        sleep_score_coverage = (
+            data["data_quality"]["coverage"]["sleep_score"]
+        )
+
+        assert sleep_score_coverage["recent_available"] == 6
+        assert sleep_score_coverage["previous_available"] == 7
+        assert sleep_score_coverage["total_available"] == 13
+
+        assert sleep_score_coverage["missing_dates"] == [
+            "2026-08-09"
+        ]
+
+        assert data["data_quality"]["requested_days"] == 14
+        assert data["data_quality"]["nights_available"] == 14
+        assert data["data_quality"]["missing_fields"] == []
+
+        assert "recovery_score" not in data
+        assert "recommended_training" not in data
+
+    async def test_get_recovery_analysis_validates_window(
+        self,
+        mock_config,
+    ):
+        mock_ctx = MagicMock()
+        mock_ctx.get_state = AsyncMock(
+            return_value=mock_config
+        )
+
+        result = await get_recovery_analysis(
+            comparison_window_days=1,
+            reference_date="2026-08-11",
+            ctx=mock_ctx,
+        )
+
+        response = json.loads(result)
+
+        assert response["error"]["type"] == "validation_error"
+
 
     def test_wellness_handles_null_sport_info(self):
         """API returns sportInfo: null for days without computed sport metrics —
