@@ -3045,3 +3045,42 @@ async def test_find_best_cycling_training_window_passes_requirements(
         == 20.0
     )
     assert requirements.max_maneuvers_per_hour == 12.0
+
+
+async def test_find_best_cycling_training_window_validates_requirements_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    ctx = SimpleNamespace(
+        get_state=AsyncMock(return_value=_config())
+    )
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError(
+                "ORS client must not be created for invalid requirements"
+            )
+
+    monkeypatch.setattr(
+        routing,
+        "OpenRouteServiceClient",
+        UnexpectedClient,
+    )
+
+    result = await routing.find_best_cycling_training_window(
+        locations=["A", "B"],
+        min_asphalt_percentage=120.0,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+
+    assert response["error"]["type"] == "validation_error"
+    assert (
+        "percentage requirements"
+        in response["error"]["message"]
+    )

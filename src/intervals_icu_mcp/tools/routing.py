@@ -2806,6 +2806,17 @@ async def find_best_cycling_training_window(
         else None
     )
 
+    if requirements is not None:
+        try:
+            _validate_training_window_requirements(
+                requirements
+            )
+        except ValueError as exc:
+            return ResponseBuilder.build_error_response(
+                str(exc),
+                error_type="validation_error",
+            )
+
     try:
         async with OpenRouteServiceClient(config) as client:
             resolved_locations = [
