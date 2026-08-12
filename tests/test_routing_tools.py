@@ -4199,6 +4199,33 @@ async def test_find_cycling_training_route_validates_deduplication_before_ors(
     assert "between 0 and 100" in response["error"]["message"]
 
 
+async def test_find_cycling_training_route_validates_duration_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        target_duration_minutes=0.0,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "target_duration_minutes" in response["error"]["message"]
+
+
 async def test_find_cycling_training_route_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4253,8 +4280,10 @@ async def test_find_cycling_training_route_success(
     result = await routing.find_cycling_training_route(
         start_location="Start",
         target_distance_km=50.0,
+        target_duration_minutes=90.0,
         training_durations_minutes=[30.0],
         candidate_count=2,
+        max_duration_deviation_percentage=20.0,
         max_warmup_maneuvers_per_hour=8.0,
         ctx=ctx,
     )
@@ -4265,12 +4294,15 @@ async def test_find_cycling_training_route_success(
     assert response["metadata"]["candidate_count_eligible"] == 2
     assert response["metadata"]["candidates_generated"] == 2
     assert response["metadata"]["candidates_after_distance_filter"] == 2
+    assert response["metadata"]["candidates_after_duration_filter"] == 2
     assert response["metadata"]["candidates_after_deduplication"] == 2
     assert response["metadata"]["deduplication"] == {
         "overlap_threshold_percentage": 90.0,
         "resample_spacing_m": 100.0,
         "proximity_m": 50.0,
     }
+    assert response["metadata"]["target_duration_minutes"] == 90.0
+    assert response["metadata"]["max_duration_deviation_percentage"] == 20.0
     assert response["metadata"]["session_eligibility_requirements"] == {
         "max_warmup_elevation_gain_rate_m_per_hour": None,
         "max_warmup_gradient_percentage": None,
@@ -4287,6 +4319,8 @@ async def test_find_cycling_training_route_success(
     search.assert_awaited_once()
     assert search.await_args.kwargs["target_distance_m"] == 50_000.0
     assert search.await_args.kwargs["durations_s"] == (1800.0,)
+    assert search.await_args.kwargs["target_duration_s"] == 5400.0
+    assert search.await_args.kwargs["max_duration_deviation_percentage"] == 20.0
     assert (
         search.await_args.kwargs[
             "deduplication_overlap_threshold_percentage"

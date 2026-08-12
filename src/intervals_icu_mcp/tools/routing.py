@@ -3851,6 +3851,10 @@ async def find_cycling_training_route(
         float,
         "Preferred total round-trip distance in kilometers.",
     ],
+    target_duration_minutes: Annotated[
+        float | None,
+        "Preferred ORS-estimated total route duration in minutes.",
+    ] = None,
     training_durations_minutes: Annotated[
         list[float] | None,
         "Candidate continuous training-block durations; defaults to 20, 30 and 40.",
@@ -3876,6 +3880,10 @@ async def find_cycling_training_route(
         float | None,
         "Maximum absolute route-distance deviation; defaults to 50 percent.",
     ] = 50.0,
+    max_duration_deviation_percentage: Annotated[
+        float | None,
+        "Maximum absolute deviation from the estimated duration target.",
+    ] = None,
     deduplication_overlap_threshold_percentage: Annotated[
         float | None,
         "Near-duplicate overlap threshold; null disables deduplication.",
@@ -3970,6 +3978,8 @@ async def find_cycling_training_route(
         validation_error = "start_location must not be empty."
     elif target_distance_km <= 0:
         validation_error = "target_distance_km must be greater than zero."
+    elif target_duration_minutes is not None and target_duration_minutes <= 0:
+        validation_error = "target_duration_minutes must be greater than zero."
     elif not 2 <= candidate_count <= 10:
         validation_error = "candidate_count must be between 2 and 10."
     elif not candidate_durations or any(value <= 0 for value in candidate_durations):
@@ -3990,6 +4000,13 @@ async def find_cycling_training_route(
     ):
         validation_error = (
             "max_distance_deviation_percentage must not be negative."
+        )
+    elif (
+        max_duration_deviation_percentage is not None
+        and max_duration_deviation_percentage < 0
+    ):
+        validation_error = (
+            "max_duration_deviation_percentage must not be negative."
         )
 
     if validation_error is None:
@@ -4108,6 +4125,14 @@ async def find_cycling_training_route(
                 max_distance_deviation_percentage=(
                     max_distance_deviation_percentage
                 ),
+                target_duration_s=(
+                    target_duration_minutes * 60.0
+                    if target_duration_minutes is not None
+                    else None
+                ),
+                max_duration_deviation_percentage=(
+                    max_duration_deviation_percentage
+                ),
                 deduplication_overlap_threshold_percentage=(
                     deduplication_overlap_threshold_percentage
                 ),
@@ -4144,6 +4169,9 @@ async def find_cycling_training_route(
                 "candidates_after_distance_filter": (
                     search_result.candidates_after_distance_filter
                 ),
+                "candidates_after_duration_filter": (
+                    search_result.candidates_after_duration_filter
+                ),
                 "candidates_after_deduplication": (
                     search_result.candidates_after_deduplication
                 ),
@@ -4155,6 +4183,10 @@ async def find_cycling_training_route(
                     "proximity_m": deduplication_proximity_m,
                 },
                 "target_distance_kilometers": target_distance_km,
+                "target_duration_minutes": target_duration_minutes,
+                "max_duration_deviation_percentage": (
+                    max_duration_deviation_percentage
+                ),
                 "max_distance_deviation_percentage": (
                     max_distance_deviation_percentage
                 ),
