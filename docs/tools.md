@@ -259,6 +259,20 @@ a round-trip length in meters. Supporting a request such as â€œI have two hoursâ
 without a distance will require an explicit expected speed or a historical athlete
 speed model rather than an undocumented default.
 
+Set `include_gpx=true` to attach a GPX 1.1 export to `best_route`. It is disabled
+by default and never added to alternatives, because route geometry already makes
+this response large. The export contains one track segment with latitude,
+longitude, and elevation where available, plus `TRAINING START` and
+`TRAINING END` waypoints for the selected block. No additional ORS request is
+made.
+
+The `gpx` object reports `format`, `encoding`, `size_bytes`, and
+`content_base64`. Decode `content_base64` and save the resulting bytes with a
+`.gpx` extension before importing them into compatible navigation software. In a
+real 30 km validation route, the GPX contained 649 trackpoints and occupied about
+39 KB before base64 encoding (about 52 KB encoded), so clients should request it
+only when they need the export.
+
 The generated geometry and route-quality metrics are planning aids. They do not
 include real-time traffic, closures, weather, daylight, or a safety guarantee.
 
