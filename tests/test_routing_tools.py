@@ -3454,3 +3454,91 @@ async def test_find_best_cycling_training_window_validates_requirements_before_o
         "percentage requirements"
         in response["error"]["message"]
     )
+
+
+async def test_find_cycling_training_route_validates_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        candidate_count=1,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "between 2 and 10" in response["error"]["message"]
+
+
+async def test_find_cycling_training_route_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    origin = _resolved_location("Start", 2.63, 39.59)
+    first = object()
+    second = object()
+    search = AsyncMock(return_value=(first, second))
+
+    class FakeClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> None:
+            return None
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", FakeClient)
+    resolve = AsyncMock(return_value=origin)
+    monkeypatch.setattr(routing, "resolve_location", resolve)
+    monkeypatch.setattr(
+        routing,
+        "find_cycling_training_route_candidates",
+        search,
+    )
+    monkeypatch.setattr(
+        routing,
+        "serialize_cycling_route_candidate_analysis",
+        lambda analysis: {"candidate": "first" if analysis is first else "second"},
+    )
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        training_durations_minutes=[30.0],
+        candidate_count=2,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["data"]["best_route"] == {"candidate": "first"}
+    assert response["data"]["alternatives"] == [{"candidate": "second"}]
+    assert response["metadata"]["candidate_count_eligible"] == 2
+    resolve.assert_awaited_once()
+    search.assert_awaited_once()
+    assert search.await_args.kwargs["target_distance_m"] == 50_000.0
+    assert search.await_args.kwargs["durations_s"] == (1800.0,)

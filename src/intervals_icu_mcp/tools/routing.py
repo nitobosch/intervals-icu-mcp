@@ -3154,3 +3154,188 @@ async def find_best_cycling_training_window(
             f"Unexpected error: {exc}",
             error_type="internal_error",
         )
+
+
+async def find_cycling_training_route(
+    start_location: Annotated[
+        str,
+        "Round-trip start as a place name or 'latitude,longitude' coordinates.",
+    ],
+    target_distance_km: Annotated[
+        float,
+        "Preferred total round-trip distance in kilometers.",
+    ],
+    training_durations_minutes: Annotated[
+        list[float] | None,
+        "Candidate continuous training-block durations; defaults to 20, 30 and 40.",
+    ] = None,
+    training_start_time_min_minutes: Annotated[
+        float,
+        "Earliest training-block start in minutes from departure.",
+    ] = 20.0,
+    training_start_time_max_minutes: Annotated[
+        float,
+        "Latest training-block start in minutes from departure.",
+    ] = 30.0,
+    candidate_count: Annotated[
+        int,
+        "Number of deterministic round-trip candidates to generate, from 2 to 10.",
+    ] = 3,
+    step_minutes: Annotated[float, "Training-block start search step in minutes."] = 1.0,
+    round_trip_points: Annotated[
+        int,
+        "ORS shaping-point count used to generate each circular route.",
+    ] = 5,
+    country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
+    focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
+    focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,
+    snap_radius_m: Annotated[float, "Maximum network snap radius in meters."] = 350.0,
+    min_asphalt_percentage: Annotated[float | None, "Minimum asphalt in the block."] = None,
+    min_road_or_cycleway_percentage: Annotated[
+        float | None,
+        "Minimum road-or-cycleway percentage in the block.",
+    ] = None,
+    min_suitability_7_plus_percentage: Annotated[
+        float | None,
+        "Minimum ORS suitability 7+ percentage in the block.",
+    ] = None,
+    max_footway_percentage: Annotated[float | None, "Maximum footway in the block."] = None,
+    max_elevation_loss_rate_m_per_hour: Annotated[
+        float | None,
+        "Maximum elevation-loss rate inside the block.",
+    ] = None,
+    max_maneuvers_per_hour: Annotated[
+        float | None,
+        "Maximum maneuver rate inside the block.",
+    ] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Generate and rank circular road-cycling routes for a training block."""
+
+    assert ctx is not None
+    config: ICUConfig = await ctx.get_state("config")
+
+    if not config.openrouteservice_api_key.strip():
+        return ResponseBuilder.build_error_response(
+            "OpenRouteService API is not configured.",
+            error_type="configuration_error",
+        )
+
+    candidate_durations = training_durations_minutes or [20.0, 30.0, 40.0]
+
+    validation_error: str | None = None
+    if not start_location.strip():
+        validation_error = "start_location must not be empty."
+    elif target_distance_km <= 0:
+        validation_error = "target_distance_km must be greater than zero."
+    elif not 2 <= candidate_count <= 10:
+        validation_error = "candidate_count must be between 2 and 10."
+    elif not candidate_durations or any(value <= 0 for value in candidate_durations):
+        validation_error = "Training-window durations must be greater than zero."
+    elif training_start_time_min_minutes < 0:
+        validation_error = "training_start_time_min_minutes must not be negative."
+    elif training_start_time_max_minutes < training_start_time_min_minutes:
+        validation_error = "training_start_time_max_minutes must not be earlier than the minimum."
+    elif step_minutes <= 0:
+        validation_error = "step_minutes must be greater than zero."
+    elif round_trip_points < 1:
+        validation_error = "round_trip_points must be at least one."
+    elif snap_radius_m <= 0:
+        validation_error = "snap_radius_m must be greater than zero."
+
+    if validation_error:
+        return ResponseBuilder.build_error_response(
+            validation_error,
+            error_type="validation_error",
+        )
+
+    requirement_values = (
+        min_asphalt_percentage,
+        min_road_or_cycleway_percentage,
+        min_suitability_7_plus_percentage,
+        max_footway_percentage,
+        max_elevation_loss_rate_m_per_hour,
+        max_maneuvers_per_hour,
+    )
+    requirements = (
+        RouteTrainingWindowRequirements(
+            min_asphalt_percentage=min_asphalt_percentage,
+            min_road_or_cycleway_percentage=min_road_or_cycleway_percentage,
+            min_suitability_7_plus_percentage=min_suitability_7_plus_percentage,
+            max_footway_percentage=max_footway_percentage,
+            max_elevation_loss_rate_m_per_hour=max_elevation_loss_rate_m_per_hour,
+            max_maneuvers_per_hour=max_maneuvers_per_hour,
+        )
+        if any(value is not None for value in requirement_values)
+        else None
+    )
+
+    if requirements is not None:
+        try:
+            _validate_training_window_requirements(requirements)
+        except ValueError as exc:
+            return ResponseBuilder.build_error_response(
+                str(exc),
+                error_type="validation_error",
+            )
+
+    try:
+        async with OpenRouteServiceClient(config) as client:
+            origin = await resolve_location(
+                client,
+                start_location,
+                country=country,
+                focus_lon=focus_longitude,
+                focus_lat=focus_latitude,
+                snap_radius_m=snap_radius_m,
+            )
+            ranked = await find_cycling_training_route_candidates(
+                client,
+                origin,
+                target_distance_m=target_distance_km * 1000.0,
+                candidate_count=candidate_count,
+                start_time_min_s=training_start_time_min_minutes * 60.0,
+                start_time_max_s=training_start_time_max_minutes * 60.0,
+                durations_s=tuple(value * 60.0 for value in candidate_durations),
+                step_s=step_minutes * 60.0,
+                round_trip_points=round_trip_points,
+                requirements=requirements,
+            )
+
+        if not ranked:
+            return ResponseBuilder.build_error_response(
+                "No generated route contains an eligible training window.",
+                error_type="not_found",
+            )
+
+        serialized = [
+            serialize_cycling_route_candidate_analysis(analysis)
+            for analysis in ranked
+        ]
+        return ResponseBuilder.build_response(
+            data={
+                "origin": asdict(origin),
+                "best_route": serialized[0],
+                "alternatives": serialized[1:],
+            },
+            metadata={
+                "profile": "cycling-road",
+                "candidate_count_requested": candidate_count,
+                "candidate_count_eligible": len(serialized),
+                "target_distance_kilometers": target_distance_km,
+                "training_duration_minutes": candidate_durations,
+                "eligibility_requirements": asdict(requirements) if requirements else {},
+            },
+            query_type="cycling_training_route",
+        )
+    except LocationResolutionError as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="location_resolution_error")
+    except (ValueError, RouteParsingError) as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="validation_error")
+    except OpenRouteServiceAPIError as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="api_error")
+    except Exception as exc:
+        return ResponseBuilder.build_error_response(
+            f"Unexpected error: {exc}",
+            error_type="internal_error",
+        )
