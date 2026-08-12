@@ -2638,23 +2638,25 @@ def calculate_training_window_comparison_metrics(
     )
 
 
-def analyze_route_warmup(
+def _analyze_route_session_segment(
     route: CyclingRoute,
     timeline: RouteTimeline,
-    training_window: RouteTrainingWindow,
+    *,
+    start_time_s: float,
+    end_time_s: float,
 ) -> RouteSessionSegmentAnalysis | None:
-    """Analyze the route segment before a selected training window."""
+    """Analyze one non-empty time range using the window engine."""
 
-    warmup_duration_s = training_window.start.time_s
+    duration_s = end_time_s - start_time_s
 
-    if warmup_duration_s <= 0:
+    if duration_s <= 0:
         return None
 
     segment = calculate_training_window(
         route,
         timeline,
-        start_time_s=0.0,
-        duration_s=warmup_duration_s,
+        start_time_s=start_time_s,
+        duration_s=duration_s,
     )
     analysis = analyze_training_window(route, segment)
 
@@ -2665,6 +2667,36 @@ def analyze_route_warmup(
         comparison=calculate_training_window_comparison_metrics(
             analysis
         ),
+    )
+
+
+def analyze_route_warmup(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    training_window: RouteTrainingWindow,
+) -> RouteSessionSegmentAnalysis | None:
+    """Analyze the route segment before a selected training window."""
+
+    return _analyze_route_session_segment(
+        route,
+        timeline,
+        start_time_s=0.0,
+        end_time_s=training_window.start.time_s,
+    )
+
+
+def analyze_route_cooldown(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    training_window: RouteTrainingWindow,
+) -> RouteSessionSegmentAnalysis | None:
+    """Analyze the route segment after a selected training window."""
+
+    return _analyze_route_session_segment(
+        route,
+        timeline,
+        start_time_s=training_window.end.time_s,
+        end_time_s=timeline.duration_s,
     )
 
 

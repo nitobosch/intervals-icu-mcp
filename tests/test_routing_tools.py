@@ -23,6 +23,7 @@ from intervals_icu_mcp.tools.routing import (
     RouteTimelinePoint,
     RouteTrainingWindow,
     RouteWindowInterruptionMetrics,
+    analyze_route_cooldown,
     analyze_route_warmup,
     build_cycling_route,
     calculate_elevation_gain_loss,
@@ -2425,7 +2426,7 @@ def test_training_window_comparison_metrics() -> None:
     )
 
 
-def test_analyze_route_warmup_reuses_window_metrics() -> None:
+def _route_for_session_segment_tests() -> CyclingRoute:
     base_route = _route_for_timeline_tests(
         [
             {
@@ -2435,7 +2436,8 @@ def test_analyze_route_warmup_reuses_window_metrics() -> None:
             }
         ]
     )
-    route = CyclingRoute(
+
+    return CyclingRoute(
         distance_m=base_route.distance_m,
         duration_s=base_route.duration_s,
         elevation_gain_m=base_route.elevation_gain_m,
@@ -2452,6 +2454,10 @@ def test_analyze_route_warmup_reuses_window_metrics() -> None:
             "suitability": {"values": [[0, 3, 8]]},
         },
     )
+
+
+def test_analyze_route_warmup_reuses_window_metrics() -> None:
+    route = _route_for_session_segment_tests()
     timeline = calculate_route_timeline(route)
     training_window = calculate_training_window(
         route,
@@ -2495,6 +2501,57 @@ def test_analyze_route_warmup_returns_none_at_route_start() -> None:
     )
 
     assert analyze_route_warmup(
+        route,
+        timeline,
+        training_window,
+    ) is None
+
+
+def test_analyze_route_cooldown_reuses_window_metrics() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=20.0,
+        duration_s=20.0,
+    )
+
+    cooldown = analyze_route_cooldown(
+        route,
+        timeline,
+        training_window,
+    )
+
+    assert isinstance(cooldown, RouteSessionSegmentAnalysis)
+    assert cooldown.segment.start.time_s == pytest.approx(40.0)
+    assert cooldown.segment.end.time_s == pytest.approx(60.0)
+    assert cooldown.segment.duration_s == pytest.approx(20.0)
+    assert cooldown.segment.distance_m > 0
+    assert cooldown.segment.elevation_gain_m is not None
+    assert cooldown.segment.elevation_loss_m is not None
+    assert cooldown.quality.asphalt_percentage == pytest.approx(100.0)
+    assert cooldown.quality.road_or_cycleway_percentage == pytest.approx(100.0)
+    assert cooldown.quality.footway_percentage == pytest.approx(0.0)
+    assert cooldown.quality.suitability_7_plus_percentage == pytest.approx(100.0)
+    assert cooldown.comparison.elevation_gain_rate_m_per_hour >= 0
+    assert cooldown.comparison.elevation_loss_rate_m_per_hour >= 0
+    assert cooldown.comparison.maneuvers_per_hour >= 0
+
+
+def test_analyze_route_cooldown_returns_none_at_route_end() -> None:
+    route = _route_for_timeline_tests(
+        [{"duration": 60.0, "way_points": [0, 3]}]
+    )
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=40.0,
+        duration_s=20.0,
+    )
+
+    assert analyze_route_cooldown(
         route,
         timeline,
         training_window,
