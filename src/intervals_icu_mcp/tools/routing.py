@@ -3136,6 +3136,154 @@ def _analyze_route_session_segment(
     )
 
 
+@dataclass(frozen=True)
+class TrainingBlockSpec:
+    """Repeated work-block duration and allowed inter-block recovery range."""
+
+    work_duration_s: float
+    repetitions: int
+    recovery_min_s: float | None = None
+    recovery_max_s: float | None = None
+
+
+@dataclass(frozen=True)
+class TrainingBlockSequenceAnalysis:
+    """Analysis of one already-selected repeated work-block sequence."""
+
+    spec: TrainingBlockSpec
+    work_blocks: tuple[RouteTrainingWindowAnalysis, ...]
+    recoveries: tuple[RouteSessionSegmentAnalysis | None, ...]
+    total_work_duration_s: float
+    total_distance_m: float
+    total_elevation_gain_m: float
+    total_elevation_loss_m: float
+    climbing_balance_m: float
+    total_maneuver_count: int
+    elevation_gain_rate_range_m_per_hour: float
+
+
+def _validate_training_block_spec(spec: TrainingBlockSpec) -> None:
+    if spec.work_duration_s <= 0:
+        raise ValueError("work_duration_s must be greater than zero")
+    if spec.repetitions < 1:
+        raise ValueError("repetitions must be at least one")
+    if spec.recovery_min_s is not None and spec.recovery_min_s < 0:
+        raise ValueError("recovery_min_s must not be negative")
+    if spec.recovery_max_s is not None and spec.recovery_max_s < 0:
+        raise ValueError("recovery_max_s must not be negative")
+    if (
+        spec.recovery_min_s is not None
+        and spec.recovery_max_s is not None
+        and spec.recovery_max_s < spec.recovery_min_s
+    ):
+        raise ValueError("recovery_max_s must not be less than recovery_min_s")
+
+
+def analyze_training_block_sequence(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    work_blocks: tuple[RouteTrainingWindowAnalysis, ...],
+    spec: TrainingBlockSpec,
+    *,
+    requirements: RouteTrainingWindowRequirements | None = None,
+) -> TrainingBlockSequenceAnalysis:
+    """Validate and analyze one chronological repeated work-block sequence."""
+
+    _validate_training_block_spec(spec)
+    if len(work_blocks) != spec.repetitions:
+        raise ValueError("work block count must equal spec.repetitions")
+
+    recoveries: list[RouteSessionSegmentAnalysis | None] = []
+    gain_rates: list[float] = []
+    total_gain_m = 0.0
+    total_loss_m = 0.0
+    timeline_resolution_s = max(
+        (
+            current.time_s - previous.time_s
+            for previous, current in zip(
+                timeline.points,
+                timeline.points[1:],
+                strict=False,
+            )
+        ),
+        default=0.0,
+    )
+
+    for index, analysis in enumerate(work_blocks):
+        window = analysis.window
+        if not math.isclose(
+            window.duration_s,
+            spec.work_duration_s,
+            rel_tol=0.0,
+            abs_tol=max(1e-6, timeline_resolution_s),
+        ):
+            raise ValueError("work block duration does not match the spec")
+        if requirements is not None and not training_window_meets_requirements(
+            analysis,
+            requirements,
+        ):
+            raise ValueError("work block does not meet eligibility requirements")
+        if window.elevation_gain_m is None or window.elevation_loss_m is None:
+            raise RouteParsingError(
+                "Multi-block analysis requires elevation gain and loss."
+            )
+
+        total_gain_m += window.elevation_gain_m
+        total_loss_m += window.elevation_loss_m
+        gain_rates.append(
+            calculate_training_window_comparison_metrics(
+                analysis
+            ).elevation_gain_rate_m_per_hour
+        )
+
+        if index == 0:
+            continue
+
+        previous = work_blocks[index - 1].window
+        recovery_duration_s = window.start.time_s - previous.end.time_s
+        if recovery_duration_s < 0:
+            raise ValueError("work blocks must not overlap")
+        if (
+            spec.recovery_min_s is not None
+            and recovery_duration_s < spec.recovery_min_s
+        ):
+            raise ValueError("recovery duration is shorter than recovery_min_s")
+        if (
+            spec.recovery_max_s is not None
+            and recovery_duration_s > spec.recovery_max_s
+        ):
+            raise ValueError("recovery duration is longer than recovery_max_s")
+        recoveries.append(
+            _analyze_route_session_segment(
+                route,
+                timeline,
+                start_time_s=previous.end.time_s,
+                end_time_s=window.start.time_s,
+            )
+        )
+
+    return TrainingBlockSequenceAnalysis(
+        spec=spec,
+        work_blocks=work_blocks,
+        recoveries=tuple(recoveries),
+        total_work_duration_s=sum(
+            analysis.window.duration_s for analysis in work_blocks
+        ),
+        total_distance_m=sum(
+            analysis.window.distance_m for analysis in work_blocks
+        ),
+        total_elevation_gain_m=total_gain_m,
+        total_elevation_loss_m=total_loss_m,
+        climbing_balance_m=total_gain_m - total_loss_m,
+        total_maneuver_count=sum(
+            analysis.interruptions.maneuver_count for analysis in work_blocks
+        ),
+        elevation_gain_rate_range_m_per_hour=(
+            max(gain_rates) - min(gain_rates)
+        ),
+    )
+
+
 def analyze_route_warmup(
     route: CyclingRoute,
     timeline: RouteTimeline,

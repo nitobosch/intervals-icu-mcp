@@ -2,6 +2,7 @@
 
 import base64
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -26,10 +27,15 @@ from intervals_icu_mcp.tools.routing import (
     RouteSessionSegmentAnalysis,
     RouteTimeline,
     RouteTimelinePoint,
+    TrainingBlockSequenceAnalysis,
+    TrainingBlockSpec,
     RouteTrainingWindow,
+    RouteTrainingWindowRequirements,
     RouteWindowInterruptionMetrics,
     analyze_route_cooldown,
     analyze_route_warmup,
+    analyze_training_block_sequence,
+    analyze_training_window,
     build_cycling_route,
     calculate_cycling_route_quality_metrics,
     calculate_elevation_gain_loss,
@@ -2859,6 +2865,181 @@ def test_calculate_cycling_route_quality_metrics() -> None:
     assert metrics.maneuver_rate_per_hour == pytest.approx(120.0)
     assert metrics.roundabout_count == 1
     assert metrics.sharp_turn_count == 1
+
+
+def test_analyze_training_block_sequence_aggregates_work_and_recovery() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    work_blocks = tuple(
+        analyze_training_window(
+            route,
+            calculate_training_window(
+                route,
+                timeline,
+                start_time_s=start_time_s,
+                duration_s=20.0,
+            ),
+        )
+        for start_time_s in (0.0, 40.0)
+    )
+    spec = TrainingBlockSpec(
+        work_duration_s=20.0,
+        repetitions=2,
+        recovery_min_s=19.0,
+        recovery_max_s=21.0,
+    )
+
+    sequence = analyze_training_block_sequence(
+        route,
+        timeline,
+        work_blocks,
+        spec,
+    )
+
+    assert isinstance(sequence, TrainingBlockSequenceAnalysis)
+    assert sequence.spec is spec
+    assert sequence.work_blocks == work_blocks
+    assert len(sequence.recoveries) == 1
+    assert all(recovery is not None for recovery in sequence.recoveries)
+    assert sequence.total_work_duration_s == pytest.approx(40.0)
+    assert sequence.total_distance_m == pytest.approx(
+        sum(block.window.distance_m for block in work_blocks)
+    )
+    assert sequence.total_elevation_gain_m == pytest.approx(
+        sum(block.window.elevation_gain_m or 0.0 for block in work_blocks)
+    )
+    assert sequence.total_elevation_loss_m == pytest.approx(
+        sum(block.window.elevation_loss_m or 0.0 for block in work_blocks)
+    )
+    assert sequence.climbing_balance_m == pytest.approx(
+        sequence.total_elevation_gain_m - sequence.total_elevation_loss_m
+    )
+    assert sequence.total_maneuver_count == sum(
+        block.interruptions.maneuver_count for block in work_blocks
+    )
+    assert sequence.elevation_gain_rate_range_m_per_hour >= 0.0
+
+
+def test_analyze_training_block_sequence_validates_shape_and_recovery() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+
+    def block(start_time_s: float, duration_s: float = 20.0):
+        return analyze_training_window(
+            route,
+            calculate_training_window(
+                route,
+                timeline,
+                start_time_s=start_time_s,
+                duration_s=duration_s,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="count"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (block(10.0),),
+            TrainingBlockSpec(work_duration_s=20.0, repetitions=2),
+        )
+
+    with pytest.raises(ValueError, match="duration does not match"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (block(0.0, 20.0),),
+            TrainingBlockSpec(work_duration_s=60.0, repetitions=1),
+        )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (block(40.0), block(0.0)),
+            TrainingBlockSpec(work_duration_s=20.0, repetitions=2),
+        )
+
+    with pytest.raises(ValueError, match="shorter"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (block(0.0), block(20.0)),
+            TrainingBlockSpec(
+                work_duration_s=20.0,
+                repetitions=2,
+                recovery_min_s=10.0,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="longer"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (block(0.0), block(40.0)),
+            TrainingBlockSpec(
+                work_duration_s=20.0,
+                repetitions=2,
+                recovery_max_s=10.0,
+            ),
+        )
+
+
+def test_analyze_training_block_sequence_applies_work_eligibility() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    analysis = analyze_training_window(
+        route,
+        calculate_training_window(
+            route,
+            timeline,
+            start_time_s=0.0,
+            duration_s=20.0,
+        ),
+    )
+    analysis = replace(
+        analysis,
+        quality=replace(analysis.quality, asphalt_percentage=50.0),
+    )
+
+    with pytest.raises(ValueError, match="eligibility requirements"):
+        analyze_training_block_sequence(
+            route,
+            timeline,
+            (analysis,),
+            TrainingBlockSpec(work_duration_s=20.0, repetitions=1),
+            requirements=RouteTrainingWindowRequirements(
+                min_asphalt_percentage=90.0,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        (TrainingBlockSpec(0.0, 1), "work_duration_s"),
+        (TrainingBlockSpec(10.0, 0), "repetitions"),
+        (TrainingBlockSpec(10.0, 2, recovery_min_s=-1.0), "recovery_min_s"),
+        (TrainingBlockSpec(10.0, 2, recovery_max_s=-1.0), "recovery_max_s"),
+        (
+            TrainingBlockSpec(
+                10.0,
+                2,
+                recovery_min_s=20.0,
+                recovery_max_s=10.0,
+            ),
+            "recovery_max_s",
+        ),
+    ],
+)
+def test_analyze_training_block_sequence_validates_spec(
+    spec: TrainingBlockSpec,
+    message: str,
+) -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(ValueError, match=message):
+        analyze_training_block_sequence(route, timeline, (), spec)
 
 
 def test_cycling_session_requirements_filter_enabled_segments() -> None:
