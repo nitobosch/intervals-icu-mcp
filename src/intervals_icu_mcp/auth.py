@@ -34,6 +34,10 @@ class ICUConfig(BaseSettings):
     strava_refresh_token: str = ""
     strava_token_store: str = "/data/strava/tokens.json"
 
+    # Optional OpenRouteService integration for route generation.
+    openrouteservice_api_key: str = ""
+    openrouteservice_base_url: str = "https://api.openrouteservice.org"
+
     @field_validator("intervals_icu_delete_mode", mode="before")
     @classmethod
     def _normalize_delete_mode(cls, v: object) -> str:
