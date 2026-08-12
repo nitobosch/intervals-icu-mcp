@@ -2631,6 +2631,7 @@ class CyclingRouteCandidateAnalysis:
     warmup: RouteSessionSegmentAnalysis | None = None
     cooldown: RouteSessionSegmentAnalysis | None = None
     route_quality: CyclingRouteQualityMetrics | None = None
+    best_training_block_sequence: TrainingBlockSequenceAnalysis | None = None
 
 
 def analyze_training_window(
@@ -3532,6 +3533,7 @@ def evaluate_cycling_route_candidates(
     step_s: float = 60.0,
     requirements: RouteTrainingWindowRequirements | None = None,
     session_requirements: CyclingSessionRequirements | None = None,
+    training_block_spec: TrainingBlockSpec | None = None,
 ) -> tuple[CyclingRouteCandidateAnalysis, ...]:
     """Evaluate candidates with the existing training-window engine."""
 
@@ -3539,21 +3541,39 @@ def evaluate_cycling_route_candidates(
 
     for candidate in candidates:
         timeline = calculate_route_timeline(candidate.route)
-        analyses = find_best_training_windows_by_duration(
-            candidate.route,
-            timeline,
-            start_time_min_s=start_time_min_s,
-            start_time_max_s=start_time_max_s,
-            durations_s=durations_s,
-            step_s=step_s,
-            requirements=requirements,
-        )
-
-        if not analyses:
-            continue
-
-        ranked = rank_training_windows_across_durations(analyses)
-        best_training_window = ranked[0]
+        best_training_block_sequence = None
+        if training_block_spec is None:
+            analyses = find_best_training_windows_by_duration(
+                candidate.route,
+                timeline,
+                start_time_min_s=start_time_min_s,
+                start_time_max_s=start_time_max_s,
+                durations_s=durations_s,
+                step_s=step_s,
+                requirements=requirements,
+            )
+            if not analyses:
+                continue
+            ranked = rank_training_windows_across_durations(analyses)
+            best_training_window = ranked[0]
+            cooldown_training_window = best_training_window
+        else:
+            sequences = find_training_block_sequences(
+                candidate.route,
+                timeline,
+                training_block_spec,
+                start_time_min_s=start_time_min_s,
+                start_time_max_s=start_time_max_s,
+                step_s=step_s,
+                requirements=requirements,
+            )
+            ranked_sequences = rank_training_block_sequences(sequences)
+            if not ranked_sequences:
+                continue
+            best_training_block_sequence = ranked_sequences[0]
+            analyses = best_training_block_sequence.work_blocks
+            best_training_window = analyses[0]
+            cooldown_training_window = analyses[-1]
         warmup = analyze_route_warmup(
             candidate.route,
             timeline,
@@ -3562,7 +3582,7 @@ def evaluate_cycling_route_candidates(
         cooldown = analyze_route_cooldown(
             candidate.route,
             timeline,
-            best_training_window.window,
+            cooldown_training_window.window,
         )
 
         if (
@@ -3586,6 +3606,7 @@ def evaluate_cycling_route_candidates(
                     candidate.route,
                     timeline,
                 ),
+                best_training_block_sequence=best_training_block_sequence,
             )
         )
 
@@ -3594,12 +3615,18 @@ def evaluate_cycling_route_candidates(
 
 def _cycling_route_candidate_rank_key(
     analysis: CyclingRouteCandidateAnalysis,
-) -> tuple[float, ...]:
+) -> tuple[Any, ...]:
     """Return a deterministic route-level ranking key."""
 
-    window_key = _cross_duration_training_window_rank_key(
-        analysis.best_training_window
-    )
+    if analysis.best_training_block_sequence is None:
+        training_key = _cross_duration_training_window_rank_key(
+            analysis.best_training_window
+        )
+    else:
+        sequence_key = _training_block_sequence_rank_key(
+            analysis.best_training_block_sequence
+        )
+        training_key = (*sequence_key[0], *sequence_key[1:])
     warmup_key = _session_segment_cleanliness_rank_key(analysis.warmup)
     cooldown_key = _session_segment_cleanliness_rank_key(
         analysis.cooldown,
@@ -3618,7 +3645,7 @@ def _cycling_route_candidate_rank_key(
     )
 
     return (
-        *window_key,
+        *training_key,
         *warmup_key,
         *cooldown_key,
         *route_quality_key,
@@ -3729,6 +3756,7 @@ async def find_cycling_training_route_candidates(
     deduplication_proximity_m: float = 50.0,
     requirements: RouteTrainingWindowRequirements | None = None,
     session_requirements: CyclingSessionRequirements | None = None,
+    training_block_spec: TrainingBlockSpec | None = None,
 ) -> CyclingRouteCandidateSearchResult:
     """Generate, evaluate and rank cycling training route candidates."""
 
@@ -3772,6 +3800,7 @@ async def find_cycling_training_route_candidates(
         step_s=step_s,
         requirements=requirements,
         session_requirements=session_requirements,
+        training_block_spec=training_block_spec,
     )
 
     return CyclingRouteCandidateSearchResult(

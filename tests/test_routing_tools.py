@@ -3498,6 +3498,97 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
     )
 
 
+def test_evaluate_cycling_route_candidates_uses_training_block_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    candidate = CyclingRouteCandidate(
+        candidate_id="round-trip-1",
+        strategy="ors_round_trip",
+        seed=0,
+        target_distance_m=2_000.0,
+        route=route,
+    )
+    timeline = object()
+    first_window = Mock(window=object())
+    last_window = Mock(window=object())
+    sequence = Mock(work_blocks=(first_window, last_window))
+    spec = TrainingBlockSpec(
+        work_duration_s=480.0,
+        repetitions=2,
+        recovery_min_s=120.0,
+        recovery_max_s=240.0,
+    )
+    warmup = object()
+    cooldown = object()
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_route_timeline",
+        Mock(return_value=timeline),
+    )
+    find_sequences = Mock(return_value=(sequence,))
+    monkeypatch.setattr(
+        routing,
+        "find_training_block_sequences",
+        find_sequences,
+    )
+    monkeypatch.setattr(
+        routing,
+        "rank_training_block_sequences",
+        lambda sequences: sequences,
+    )
+    find_continuous = Mock()
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        find_continuous,
+    )
+    analyze_warmup = Mock(return_value=warmup)
+    analyze_cooldown = Mock(return_value=cooldown)
+    monkeypatch.setattr(routing, "analyze_route_warmup", analyze_warmup)
+    monkeypatch.setattr(routing, "analyze_route_cooldown", analyze_cooldown)
+    monkeypatch.setattr(
+        routing,
+        "calculate_cycling_route_quality_metrics",
+        Mock(return_value=object()),
+    )
+
+    result = evaluate_cycling_route_candidates(
+        (candidate,),
+        start_time_min_s=1_200.0,
+        start_time_max_s=1_800.0,
+        durations_s=(1_800.0,),
+        training_block_spec=spec,
+    )
+
+    assert result[0].best_training_block_sequence is sequence
+    assert result[0].best_training_window is first_window
+    assert result[0].best_by_duration == (first_window, last_window)
+    find_continuous.assert_not_called()
+    find_sequences.assert_called_once_with(
+        route,
+        timeline,
+        spec,
+        start_time_min_s=1_200.0,
+        start_time_max_s=1_800.0,
+        step_s=60.0,
+        requirements=None,
+    )
+    analyze_warmup.assert_called_once_with(
+        route,
+        timeline,
+        first_window.window,
+    )
+    analyze_cooldown.assert_called_once_with(
+        route,
+        timeline,
+        last_window.window,
+    )
+
+
 def test_rank_cycling_route_candidates_prioritizes_best_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3542,6 +3633,58 @@ def test_rank_cycling_route_candidates_prioritizes_best_window(
         stronger,
         closer,
     )
+
+
+def test_rank_cycling_route_candidates_uses_training_block_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    common_window = object()
+    stronger_sequence = object()
+    weaker_sequence = object()
+
+    def analyzed(
+        candidate_id: str,
+        sequence: object,
+    ) -> CyclingRouteCandidateAnalysis:
+        return CyclingRouteCandidateAnalysis(
+            candidate=CyclingRouteCandidate(
+                candidate_id=candidate_id,
+                strategy="ors_round_trip",
+                seed=0,
+                target_distance_m=2_000.0,
+                route=route,
+            ),
+            best_training_window=common_window,
+            best_by_duration=(),
+            best_training_block_sequence=sequence,
+        )
+
+    stronger = analyzed("stronger", stronger_sequence)
+    weaker = analyzed("weaker", weaker_sequence)
+    keys = {
+        id(stronger_sequence): ((900.0, 4.0), -10.0),
+        id(weaker_sequence): ((800.0, 4.0), -10.0),
+    }
+    monkeypatch.setattr(
+        routing,
+        "_training_block_sequence_rank_key",
+        lambda sequence: keys[id(sequence)],
+    )
+    continuous_rank = Mock()
+    monkeypatch.setattr(
+        routing,
+        "_cross_duration_training_window_rank_key",
+        continuous_rank,
+    )
+
+    assert rank_cycling_route_candidates((weaker, stronger)) == (
+        stronger,
+        weaker,
+    )
+    continuous_rank.assert_not_called()
 
 
 def test_rank_cycling_route_candidates_uses_distance_tiebreaker(
@@ -3801,6 +3944,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         step_s=60.0,
         requirements=None,
         session_requirements=None,
+        training_block_spec=None,
     )
     rank.assert_called_once_with(evaluated)
     deduplicate.assert_called_once_with(
