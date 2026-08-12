@@ -1,5 +1,6 @@
 """Tests for routing location helpers."""
 
+import xml.etree.ElementTree as ET
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -41,6 +42,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_extra_distributions,
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
+    cycling_route_to_gpx,
     cycling_session_meets_requirements,
     deduplicate_cycling_route_candidates,
     evaluate_cycling_route_candidates,
@@ -888,6 +890,116 @@ def test_resample_route_geometry_interpolates_endpoints() -> None:
     assert len(resampled) > 2
     assert resampled[1].elevation_m is not None
     assert 100.0 < resampled[1].elevation_m < 130.0
+
+
+def test_cycling_route_to_gpx_serializes_track_and_training_waypoints() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=20.0,
+        duration_s=20.0,
+    )
+
+    content = cycling_route_to_gpx(
+        route,
+        name="Climb & tempo <session>",
+        description="Road route & training block",
+        training_window=training_window,
+    )
+
+    assert content.startswith(b"<?xml")
+    root = ET.fromstring(content)
+    namespace = {"gpx": "http://www.topografix.com/GPX/1/1"}
+
+    assert root.tag == "{http://www.topografix.com/GPX/1/1}gpx"
+    assert root.attrib == {
+        "version": "1.1",
+        "creator": "intervals-icu-mcp",
+    }
+    assert root.findtext("gpx:metadata/gpx:name", namespaces=namespace) == (
+        "Climb & tempo <session>"
+    )
+    assert root.findtext("gpx:metadata/gpx:desc", namespaces=namespace) == (
+        "Road route & training block"
+    )
+
+    track_points = root.findall(
+        "gpx:trk/gpx:trkseg/gpx:trkpt",
+        namespace,
+    )
+    assert len(track_points) == len(route.geometry)
+    assert track_points[0].attrib == {
+        "lat": str(route.geometry[0].latitude),
+        "lon": str(route.geometry[0].longitude),
+    }
+    assert track_points[0].find("gpx:ele", namespace) is not None
+
+    waypoints = root.findall("gpx:wpt", namespace)
+    assert [
+        waypoint.findtext("gpx:name", namespaces=namespace)
+        for waypoint in waypoints
+    ] == ["TRAINING START", "TRAINING END"]
+
+
+def test_cycling_route_to_gpx_omits_optional_values() -> None:
+    base = _route_for_extra_tests({})
+    route = CyclingRoute(
+        distance_m=base.distance_m,
+        duration_s=base.duration_s,
+        elevation_gain_m=None,
+        elevation_loss_m=None,
+        ors_ascent_m=None,
+        ors_descent_m=None,
+        geometry=tuple(
+            RouteCoordinate(point.longitude, point.latitude)
+            for point in base.geometry
+        ),
+        waypoint_indices=base.waypoint_indices,
+        segments=base.segments,
+        extras=base.extras,
+    )
+
+    root = ET.fromstring(cycling_route_to_gpx(route))
+    namespace = {"gpx": "http://www.topografix.com/GPX/1/1"}
+
+    assert root.find("gpx:metadata/gpx:desc", namespace) is None
+    assert root.findall("gpx:wpt", namespace) == []
+    assert root.findall("gpx:trk/gpx:trkseg/gpx:trkpt/gpx:ele", namespace) == []
+
+
+def test_cycling_route_to_gpx_rejects_invalid_geometry() -> None:
+    base = _route_for_extra_tests({})
+    empty_route = CyclingRoute(
+        distance_m=0.0,
+        duration_s=0.0,
+        elevation_gain_m=None,
+        elevation_loss_m=None,
+        ors_ascent_m=None,
+        ors_descent_m=None,
+        geometry=(),
+        waypoint_indices=(),
+        segments=(),
+        extras={},
+    )
+    with pytest.raises(ValueError, match="empty route geometry"):
+        cycling_route_to_gpx(empty_route)
+
+    invalid_route = CyclingRoute(
+        distance_m=base.distance_m,
+        duration_s=base.duration_s,
+        elevation_gain_m=base.elevation_gain_m,
+        elevation_loss_m=base.elevation_loss_m,
+        ors_ascent_m=base.ors_ascent_m,
+        ors_descent_m=base.ors_descent_m,
+        geometry=(RouteCoordinate(float("nan"), 39.59),),
+        waypoint_indices=(),
+        segments=(),
+        extras={},
+    )
+    with pytest.raises(ValueError, match="must be finite"):
+        cycling_route_to_gpx(invalid_route)
 
 
 def test_deduplicate_cycling_route_candidates_uses_symmetric_overlap() -> None:

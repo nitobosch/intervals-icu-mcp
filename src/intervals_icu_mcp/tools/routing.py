@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import unicodedata
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Literal, cast
 
@@ -744,6 +745,90 @@ class CyclingRouteCandidate:
 _EARTH_RADIUS_M = 6_371_008.8
 _ELEVATION_RESAMPLE_M = 25.0
 _ELEVATION_SMOOTHING_WINDOW_M = 200.0
+_GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
+
+
+def cycling_route_to_gpx(
+    route: CyclingRoute,
+    *,
+    name: str = "Cycling training route",
+    description: str | None = None,
+    training_window: RouteTrainingWindow | None = None,
+) -> bytes:
+    """Serialize a cycling route and optional training markers as GPX 1.1."""
+
+    if not route.geometry:
+        raise ValueError("Cannot export an empty route geometry to GPX")
+
+    ET.register_namespace("", _GPX_NAMESPACE)
+
+    def element_name(local_name: str) -> str:
+        return f"{{{_GPX_NAMESPACE}}}{local_name}"
+
+    root = ET.Element(
+        element_name("gpx"),
+        {
+            "version": "1.1",
+            "creator": "intervals-icu-mcp",
+        },
+    )
+    metadata = ET.SubElement(root, element_name("metadata"))
+    ET.SubElement(metadata, element_name("name")).text = name
+    if description is not None:
+        ET.SubElement(metadata, element_name("desc")).text = description
+
+    if training_window is not None:
+        marker_indices = (
+            (training_window.start.geometry_index, "TRAINING START"),
+            (training_window.end.geometry_index, "TRAINING END"),
+        )
+        for geometry_index, marker_name in marker_indices:
+            if not 0 <= geometry_index < len(route.geometry):
+                raise ValueError(
+                    "Training-window geometry index is outside the route"
+                )
+            coordinate = route.geometry[geometry_index]
+            waypoint = ET.SubElement(
+                root,
+                element_name("wpt"),
+                {
+                    "lat": _format_gpx_number(coordinate.latitude),
+                    "lon": _format_gpx_number(coordinate.longitude),
+                },
+            )
+            if coordinate.elevation_m is not None:
+                ET.SubElement(waypoint, element_name("ele")).text = (
+                    _format_gpx_number(coordinate.elevation_m)
+                )
+            ET.SubElement(waypoint, element_name("name")).text = marker_name
+
+    track = ET.SubElement(root, element_name("trk"))
+    ET.SubElement(track, element_name("name")).text = name
+    track_segment = ET.SubElement(track, element_name("trkseg"))
+
+    for coordinate in route.geometry:
+        track_point = ET.SubElement(
+            track_segment,
+            element_name("trkpt"),
+            {
+                "lat": _format_gpx_number(coordinate.latitude),
+                "lon": _format_gpx_number(coordinate.longitude),
+            },
+        )
+        if coordinate.elevation_m is not None:
+            ET.SubElement(track_point, element_name("ele")).text = (
+                _format_gpx_number(coordinate.elevation_m)
+            )
+
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _format_gpx_number(value: float) -> str:
+    """Format a finite GPX coordinate or elevation deterministically."""
+
+    if not math.isfinite(value):
+        raise ValueError("GPX numeric values must be finite")
+    return format(value, ".10g")
 
 
 def _numeric_value(value: Any) -> float | None:
