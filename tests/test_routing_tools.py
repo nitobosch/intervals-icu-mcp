@@ -36,6 +36,7 @@ from intervals_icu_mcp.tools.routing import (
     select_geocode_candidate,
     snap_coordinate,
     split_location_query,
+    timeline_point_at_time,
 )
 
 
@@ -1352,3 +1353,77 @@ def test_route_timeline_rejects_incomplete_geometry() -> None:
         match="do not cover the full geometry",
     ):
         calculate_route_timeline(route)
+
+
+def test_timeline_point_at_time_finds_nearest_point() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    point = timeline_point_at_time(
+        timeline,
+        19.0,
+    )
+
+    assert point.geometry_index == 2
+
+
+def test_timeline_point_at_time_handles_boundaries() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    assert timeline_point_at_time(
+        timeline,
+        0.0,
+    ).geometry_index == 0
+
+    assert timeline_point_at_time(
+        timeline,
+        30.0,
+    ).geometry_index == 3
+
+
+def test_timeline_point_at_time_rejects_out_of_range_time() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(
+        ValueError,
+        match="non-negative",
+    ):
+        timeline_point_at_time(
+            timeline,
+            -1.0,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="exceeds route timeline duration",
+    ):
+        timeline_point_at_time(
+            timeline,
+            31.0,
+        )

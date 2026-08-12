@@ -1667,3 +1667,50 @@ def calculate_route_timeline(
         geometry_distance_m=cumulative_distance[-1],
         duration_s=elapsed_s,
     )
+
+
+def timeline_point_at_time(
+    timeline: RouteTimeline,
+    time_s: float,
+) -> RouteTimelinePoint:
+    """Return the geometry point nearest to a requested elapsed route time."""
+
+    if not timeline.points:
+        raise RouteParsingError(
+            "Cannot query an empty route timeline."
+        )
+
+    if time_s < 0:
+        raise ValueError("time_s must be non-negative.")
+
+    if time_s > timeline.duration_s:
+        raise ValueError(
+            "time_s exceeds route timeline duration."
+        )
+
+    low = 0
+    high = len(timeline.points) - 1
+
+    while low < high:
+        mid = (low + high) // 2
+
+        if timeline.points[mid].time_s < time_s:
+            low = mid + 1
+        else:
+            high = mid
+
+    after_index = low
+
+    if after_index == 0:
+        return timeline.points[0]
+
+    before = timeline.points[after_index - 1]
+    after = timeline.points[after_index]
+
+    if (
+        time_s - before.time_s
+        <= after.time_s - time_s
+    ):
+        return before
+
+    return after
