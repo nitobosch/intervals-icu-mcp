@@ -242,6 +242,23 @@ disable deduplication. Response metadata reports `candidates_generated`,
 `candidates_after_distance_filter`, and `candidates_after_deduplication`, along
 with the applied settings.
 
+An optional `target_duration_minutes` adds a total-duration objective while
+distance continues to drive ORS round-trip generation. Candidate responses include
+the target plus signed duration deviation in seconds and percent. Duration fit is
+an explicit lexicographic tie-breaker after training, warmup, cooldown, and overall
+route quality, and before distance fit.
+
+`max_duration_deviation_percentage` is an optional hard constraint and defaults
+to `null`; when enabled, it is applied after the distance filter and before
+geometric deduplication. Metadata reports
+`candidates_after_duration_filter`, the requested duration, and the tolerance.
+
+ORS duration is a routing-profile estimate, not the athlete's predicted moving or
+elapsed time. Duration-only generation is therefore not supported yet: ORS requires
+a round-trip length in meters. Supporting a request such as “I have two hours”
+without a distance will require an explicit expected speed or a historical athlete
+speed model rather than an undocumented default.
+
 The generated geometry and route-quality metrics are planning aids. They do not
 include real-time traffic, closures, weather, daylight, or a safety guarantee.
 
