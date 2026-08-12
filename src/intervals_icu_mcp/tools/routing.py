@@ -802,6 +802,152 @@ def _geometry_cumulative_distances(
     return distances
 
 
+def resample_route_geometry(
+    coordinates: tuple[RouteCoordinate, ...],
+    *,
+    spacing_m: float,
+) -> tuple[RouteCoordinate, ...]:
+    """Resample route coordinates at deterministic distance intervals."""
+
+    if spacing_m <= 0:
+        raise ValueError("spacing_m must be greater than zero")
+
+    if len(coordinates) < 2:
+        return coordinates
+
+    cumulative = _geometry_cumulative_distances(coordinates)
+    total_distance = cumulative[-1]
+    if total_distance <= 0:
+        return (coordinates[0],)
+
+    targets: list[float] = []
+    target = 0.0
+    while target < total_distance:
+        targets.append(target)
+        target += spacing_m
+    targets.append(total_distance)
+
+    result: list[RouteCoordinate] = []
+    segment_index = 0
+    for target_distance in targets:
+        while (
+            segment_index + 1 < len(cumulative)
+            and cumulative[segment_index + 1] < target_distance
+        ):
+            segment_index += 1
+
+        if segment_index + 1 >= len(coordinates):
+            result.append(coordinates[-1])
+            continue
+
+        start = coordinates[segment_index]
+        end = coordinates[segment_index + 1]
+        start_distance = cumulative[segment_index]
+        segment_distance = cumulative[segment_index + 1] - start_distance
+        fraction = (
+            (target_distance - start_distance) / segment_distance
+            if segment_distance > 0
+            else 0.0
+        )
+        elevation_m = (
+            start.elevation_m
+            + (end.elevation_m - start.elevation_m) * fraction
+            if start.elevation_m is not None and end.elevation_m is not None
+            else None
+        )
+        result.append(
+            RouteCoordinate(
+                longitude=start.longitude
+                + (end.longitude - start.longitude) * fraction,
+                latitude=start.latitude
+                + (end.latitude - start.latitude) * fraction,
+                elevation_m=elevation_m,
+            )
+        )
+
+    return tuple(result)
+
+
+def calculate_route_geometry_overlap_percentage(
+    first: CyclingRoute,
+    second: CyclingRoute,
+    *,
+    resample_spacing_m: float = 100.0,
+    proximity_m: float = 50.0,
+) -> float:
+    """Estimate symmetric geometric overlap between two cycling routes."""
+
+    if proximity_m <= 0:
+        raise ValueError("proximity_m must be greater than zero")
+
+    first_points = resample_route_geometry(
+        first.geometry,
+        spacing_m=resample_spacing_m,
+    )
+    second_points = resample_route_geometry(
+        second.geometry,
+        spacing_m=resample_spacing_m,
+    )
+    if not first_points or not second_points:
+        return 0.0
+
+    def directional_overlap(
+        source: tuple[RouteCoordinate, ...],
+        target: tuple[RouteCoordinate, ...],
+    ) -> float:
+        matching = sum(
+            1
+            for source_point in source
+            if any(
+                _haversine_distance_m(source_point, target_point)
+                <= proximity_m
+                for target_point in target
+            )
+        )
+        return matching / len(source) * 100.0
+
+    return min(
+        directional_overlap(first_points, second_points),
+        directional_overlap(second_points, first_points),
+    )
+
+
+def deduplicate_cycling_route_candidates(
+    candidates: tuple[CyclingRouteCandidate, ...],
+    *,
+    overlap_threshold_percentage: float = 90.0,
+    resample_spacing_m: float = 100.0,
+    proximity_m: float = 50.0,
+) -> tuple[CyclingRouteCandidate, ...]:
+    """Keep the first candidate from each near-duplicate geometry group."""
+
+    if not 0.0 <= overlap_threshold_percentage <= 100.0:
+        raise ValueError(
+            "overlap_threshold_percentage must be between 0 and 100"
+        )
+    if resample_spacing_m <= 0:
+        raise ValueError("resample_spacing_m must be greater than zero")
+    if proximity_m <= 0:
+        raise ValueError("proximity_m must be greater than zero")
+
+    unique: list[CyclingRouteCandidate] = []
+    for candidate in candidates:
+        if any(
+            calculate_route_geometry_overlap_percentage(
+                candidate.route,
+                retained.route,
+                resample_spacing_m=resample_spacing_m,
+                proximity_m=proximity_m,
+            )
+            >= overlap_threshold_percentage
+            for retained in unique
+        ):
+            continue
+        unique.append(candidate)
+
+    return tuple(unique)
+
+
 def _resample_elevations(
     coordinates: tuple[RouteCoordinate, ...],
     *,

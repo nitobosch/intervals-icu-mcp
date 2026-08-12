@@ -33,6 +33,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_extra_distribution,
     calculate_extra_distribution_for_geometry_range,
     calculate_route_extra_distributions,
+    calculate_route_geometry_overlap_percentage,
     calculate_route_quality_metrics,
     calculate_route_timeline,
     calculate_training_window,
@@ -40,6 +41,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
     cycling_session_meets_requirements,
+    deduplicate_cycling_route_candidates,
     evaluate_cycling_route_candidates,
     extract_geocode_candidates,
     find_cycling_training_route_candidates,
@@ -51,6 +53,7 @@ from intervals_icu_mcp.tools.routing import (
     parse_cycling_route_response,
     parse_lat_lon,
     rank_cycling_route_candidates,
+    resample_route_geometry,
     resolve_coordinate_location,
     resolve_location,
     resolve_named_location,
@@ -868,6 +871,108 @@ async def test_build_cycling_route_calls_directions_and_parses() -> None:
             "suitability",
         ],
     )
+
+
+def test_resample_route_geometry_interpolates_endpoints() -> None:
+    geometry = (
+        RouteCoordinate(2.63, 39.59, 100.0),
+        RouteCoordinate(2.633, 39.59, 130.0),
+    )
+
+    resampled = resample_route_geometry(geometry, spacing_m=100.0)
+
+    assert resampled[0] == geometry[0]
+    assert resampled[-1] == geometry[-1]
+    assert len(resampled) > 2
+    assert resampled[1].elevation_m is not None
+    assert 100.0 < resampled[1].elevation_m < 130.0
+
+
+def test_deduplicate_cycling_route_candidates_uses_symmetric_overlap() -> None:
+    base = _route_for_extra_tests({})
+
+    def route(latitude_offset: float, point_count: int = 4) -> CyclingRoute:
+        geometry = tuple(
+            RouteCoordinate(
+                longitude=2.63 + index * 0.001,
+                latitude=39.59 + latitude_offset,
+                elevation_m=100.0,
+            )
+            for index in range(point_count)
+        )
+        return CyclingRoute(
+            distance_m=base.distance_m,
+            duration_s=base.duration_s,
+            elevation_gain_m=base.elevation_gain_m,
+            elevation_loss_m=base.elevation_loss_m,
+            ors_ascent_m=base.ors_ascent_m,
+            ors_descent_m=base.ors_descent_m,
+            geometry=geometry,
+            waypoint_indices=base.waypoint_indices,
+            segments=base.segments,
+            extras=base.extras,
+        )
+
+    first_route = route(0.0)
+    near_route = route(0.00005)
+    far_route = route(0.01)
+    partial_route = route(0.0, point_count=2)
+
+    assert calculate_route_geometry_overlap_percentage(
+        first_route,
+        near_route,
+        resample_spacing_m=50.0,
+        proximity_m=20.0,
+    ) == pytest.approx(100.0)
+    assert calculate_route_geometry_overlap_percentage(
+        first_route,
+        partial_route,
+        resample_spacing_m=50.0,
+        proximity_m=20.0,
+    ) < 90.0
+
+    candidates = tuple(
+        CyclingRouteCandidate(
+            candidate_id=candidate_id,
+            strategy="ors_round_trip",
+            seed=index,
+            target_distance_m=base.distance_m,
+            route=candidate_route,
+        )
+        for index, (candidate_id, candidate_route) in enumerate(
+            (
+                ("first", first_route),
+                ("near", near_route),
+                ("far", far_route),
+            )
+        )
+    )
+
+    deduplicated = deduplicate_cycling_route_candidates(
+        candidates,
+        overlap_threshold_percentage=90.0,
+        resample_spacing_m=50.0,
+        proximity_m=20.0,
+    )
+
+    assert [candidate.candidate_id for candidate in deduplicated] == [
+        "first",
+        "far",
+    ]
+
+
+def test_deduplicate_cycling_route_candidates_validates_threshold() -> None:
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        deduplicate_cycling_route_candidates(
+            (),
+            overlap_threshold_percentage=101.0,
+        )
+
+    with pytest.raises(ValueError, match="resample_spacing_m"):
+        deduplicate_cycling_route_candidates((), resample_spacing_m=0.0)
+
+    with pytest.raises(ValueError, match="proximity_m"):
+        deduplicate_cycling_route_candidates((), proximity_m=0.0)
 
 
 async def test_generate_cycling_route_candidates_uses_deterministic_seeds() -> None:
