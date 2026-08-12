@@ -255,6 +255,63 @@ async def test_directions_requires_at_least_two_coordinates() -> None:
             )
 
 
+async def test_directions_allows_one_coordinate_for_round_trip() -> None:
+    config = _config()
+
+    with respx.mock(
+        base_url=ORS_BASE_URL,
+        assert_all_called=True,
+    ) as router:
+        route = router.post(
+            "/v2/directions/cycling-road/geojson"
+        ).mock(
+            return_value=Response(
+                200,
+                json={"features": []},
+            )
+        )
+
+        async with OpenRouteServiceClient(config) as client:
+            await client.directions(
+                [[2.631246, 39.590265]],
+                options={
+                    "round_trip": {
+                        "length": 50_000,
+                        "points": 5,
+                        "seed": 1,
+                    }
+                },
+            )
+
+    payload = json.loads(route.calls[0].request.content)
+
+    assert payload["coordinates"] == [[2.631246, 39.590265]]
+    assert payload["options"] == {
+        "round_trip": {
+            "length": 50_000,
+            "points": 5,
+            "seed": 1,
+        }
+    }
+
+
+async def test_directions_rejects_empty_round_trip_coordinates() -> None:
+    async with OpenRouteServiceClient(_config()) as client:
+        with pytest.raises(
+            ValueError,
+            match="coordinates must not be empty",
+        ):
+            await client.directions(
+                [],
+                options={
+                    "round_trip": {
+                        "length": 50_000,
+                        "points": 5,
+                    }
+                },
+            )
+
+
 async def test_http_error_is_wrapped() -> None:
     config = _config()
 

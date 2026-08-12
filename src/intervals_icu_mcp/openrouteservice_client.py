@@ -231,9 +231,17 @@ class OpenRouteServiceClient:
         extra_info: list[str] | None = None,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Calculate a route through two or more coordinates."""
+        """Calculate a route or a round trip through the given coordinates."""
 
-        if len(coordinates) < 2:
+        round_trip_requested = bool(
+            options
+            and "round_trip" in options
+        )
+
+        if not coordinates:
+            raise ValueError("coordinates must not be empty")
+
+        if len(coordinates) < 2 and not round_trip_requested:
             raise ValueError("coordinates must contain at least two points")
 
         for coordinate in coordinates:
