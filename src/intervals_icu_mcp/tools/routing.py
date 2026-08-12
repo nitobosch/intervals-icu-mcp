@@ -2136,3 +2136,48 @@ def calculate_training_window_interruption_metrics(
         roundabout_count=roundabout_count,
         u_turn_count=u_turn_count,
     )
+
+
+def generate_training_window_candidates(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    duration_s: float,
+    step_s: float = 60.0,
+) -> tuple[RouteTrainingWindow, ...]:
+    """Generate fixed-duration training windows across a start-time range."""
+
+    if start_time_min_s < 0:
+        raise ValueError("start_time_min_s must be non-negative.")
+
+    if start_time_max_s < start_time_min_s:
+        raise ValueError(
+            "start_time_max_s must be greater than or equal to start_time_min_s."
+        )
+
+    if duration_s <= 0:
+        raise ValueError("duration_s must be greater than zero.")
+
+    if step_s <= 0:
+        raise ValueError("step_s must be greater than zero.")
+
+    candidates: list[RouteTrainingWindow] = []
+
+    start_time_s = start_time_min_s
+
+    while start_time_s <= start_time_max_s:
+        if start_time_s + duration_s <= timeline.duration_s:
+            candidates.append(
+                calculate_training_window(
+                    route,
+                    timeline,
+                    start_time_s=start_time_s,
+                    duration_s=duration_s,
+                )
+            )
+
+        start_time_s += step_s
+
+    return tuple(candidates)

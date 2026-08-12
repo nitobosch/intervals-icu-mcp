@@ -32,6 +32,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
     extract_geocode_candidates,
+    generate_training_window_candidates,
     geocode_location_candidates,
     name_token_coverage,
     normalize_location_text,
@@ -1819,3 +1820,86 @@ def test_training_window_interruption_metrics_counts_u_turn() -> None:
 
     assert metrics.maneuver_count == 1
     assert metrics.u_turn_count == 1
+
+
+def test_generate_training_window_candidates() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 60.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    candidates = generate_training_window_candidates(
+        route,
+        timeline,
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        duration_s=20.0,
+        step_s=20.0,
+    )
+
+    assert len(candidates) == 3
+
+    assert candidates[0].start.time_s == pytest.approx(
+        0.0,
+        abs=0.1,
+    )
+    assert candidates[-1].start.time_s == pytest.approx(
+        40.0,
+        abs=0.1,
+    )
+
+
+def test_generate_training_window_candidates_skips_past_route_end() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    candidates = generate_training_window_candidates(
+        route,
+        timeline,
+        start_time_min_s=0.0,
+        start_time_max_s=20.0,
+        duration_s=20.0,
+        step_s=10.0,
+    )
+
+    assert len(candidates) == 2
+
+
+def test_generate_training_window_candidates_rejects_invalid_step() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(
+        ValueError,
+        match="step_s must be greater than zero",
+    ):
+        generate_training_window_candidates(
+            route,
+            timeline,
+            start_time_min_s=0.0,
+            start_time_max_s=10.0,
+            duration_s=10.0,
+            step_s=0.0,
+        )
