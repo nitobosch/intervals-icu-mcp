@@ -2666,6 +2666,132 @@ class RouteSessionSegmentAnalysis:
     comparison: RouteTrainingWindowComparisonMetrics
 
 
+@dataclass(frozen=True)
+class CyclingSessionRequirements:
+    """Optional hard eligibility requirements for warmup and cooldown."""
+
+    max_warmup_elevation_gain_rate_m_per_hour: float | None = None
+    max_warmup_gradient_percentage: float | None = None
+    max_warmup_maneuvers_per_hour: float | None = None
+    min_warmup_asphalt_percentage: float | None = None
+    max_warmup_footway_percentage: float | None = None
+
+    max_cooldown_elevation_gain_rate_m_per_hour: float | None = None
+    max_cooldown_gradient_percentage: float | None = None
+    max_cooldown_maneuvers_per_hour: float | None = None
+    min_cooldown_asphalt_percentage: float | None = None
+    max_cooldown_footway_percentage: float | None = None
+
+
+def _validate_cycling_session_requirements(
+    requirements: CyclingSessionRequirements,
+) -> None:
+    percentage_values = (
+        requirements.min_warmup_asphalt_percentage,
+        requirements.max_warmup_footway_percentage,
+        requirements.min_cooldown_asphalt_percentage,
+        requirements.max_cooldown_footway_percentage,
+    )
+    for value in percentage_values:
+        if value is not None and not 0.0 <= value <= 100.0:
+            raise ValueError(
+                "Session percentage requirements must be between 0 and 100."
+            )
+
+    rate_values = (
+        requirements.max_warmup_elevation_gain_rate_m_per_hour,
+        requirements.max_warmup_maneuvers_per_hour,
+        requirements.max_cooldown_elevation_gain_rate_m_per_hour,
+        requirements.max_cooldown_maneuvers_per_hour,
+    )
+    for value in rate_values:
+        if value is not None and value < 0.0:
+            raise ValueError(
+                "Session rate requirements must not be negative."
+            )
+
+
+def _session_segment_meets_requirements(
+    analysis: RouteSessionSegmentAnalysis | None,
+    *,
+    max_elevation_gain_rate_m_per_hour: float | None,
+    max_gradient_percentage: float | None,
+    max_maneuvers_per_hour: float | None,
+    min_asphalt_percentage: float | None,
+    max_footway_percentage: float | None,
+) -> bool:
+    values = (
+        max_elevation_gain_rate_m_per_hour,
+        max_gradient_percentage,
+        max_maneuvers_per_hour,
+        min_asphalt_percentage,
+        max_footway_percentage,
+    )
+    if not any(value is not None for value in values):
+        return True
+
+    if analysis is None:
+        return False
+
+    comparison = analysis.comparison
+    quality = analysis.quality
+
+    return not (
+        (
+            max_elevation_gain_rate_m_per_hour is not None
+            and comparison.elevation_gain_rate_m_per_hour
+            > max_elevation_gain_rate_m_per_hour
+        )
+        or (
+            max_gradient_percentage is not None
+            and comparison.climbing_balance_gradient_percentage
+            > max_gradient_percentage
+        )
+        or (
+            max_maneuvers_per_hour is not None
+            and comparison.maneuvers_per_hour > max_maneuvers_per_hour
+        )
+        or (
+            min_asphalt_percentage is not None
+            and quality.asphalt_percentage < min_asphalt_percentage
+        )
+        or (
+            max_footway_percentage is not None
+            and quality.footway_percentage > max_footway_percentage
+        )
+    )
+
+
+def cycling_session_meets_requirements(
+    warmup: RouteSessionSegmentAnalysis | None,
+    cooldown: RouteSessionSegmentAnalysis | None,
+    requirements: CyclingSessionRequirements,
+) -> bool:
+    """Return whether warmup and cooldown satisfy all enabled constraints."""
+
+    _validate_cycling_session_requirements(requirements)
+
+    return _session_segment_meets_requirements(
+        warmup,
+        max_elevation_gain_rate_m_per_hour=(
+            requirements.max_warmup_elevation_gain_rate_m_per_hour
+        ),
+        max_gradient_percentage=requirements.max_warmup_gradient_percentage,
+        max_maneuvers_per_hour=requirements.max_warmup_maneuvers_per_hour,
+        min_asphalt_percentage=requirements.min_warmup_asphalt_percentage,
+        max_footway_percentage=requirements.max_warmup_footway_percentage,
+    ) and _session_segment_meets_requirements(
+        cooldown,
+        max_elevation_gain_rate_m_per_hour=(
+            requirements.max_cooldown_elevation_gain_rate_m_per_hour
+        ),
+        max_gradient_percentage=requirements.max_cooldown_gradient_percentage,
+        max_maneuvers_per_hour=requirements.max_cooldown_maneuvers_per_hour,
+        min_asphalt_percentage=requirements.min_cooldown_asphalt_percentage,
+        max_footway_percentage=requirements.max_cooldown_footway_percentage,
+    )
+
+
 def calculate_training_window_comparison_metrics(
     analysis: RouteTrainingWindowAnalysis,
 ) -> RouteTrainingWindowComparisonMetrics:
@@ -2844,6 +2970,7 @@ def evaluate_cycling_route_candidates(
     durations_s: tuple[float, ...],
     step_s: float = 60.0,
     requirements: RouteTrainingWindowRequirements | None = None,
+    session_requirements: CyclingSessionRequirements | None = None,
 ) -> tuple[CyclingRouteCandidateAnalysis, ...]:
     """Evaluate candidates with the existing training-window engine."""
 
@@ -2866,21 +2993,34 @@ def evaluate_cycling_route_candidates(
 
         ranked = rank_training_windows_across_durations(analyses)
         best_training_window = ranked[0]
+        warmup = analyze_route_warmup(
+            candidate.route,
+            timeline,
+            best_training_window.window,
+        )
+        cooldown = analyze_route_cooldown(
+            candidate.route,
+            timeline,
+            best_training_window.window,
+        )
+
+        if (
+            session_requirements is not None
+            and not cycling_session_meets_requirements(
+                warmup,
+                cooldown,
+                session_requirements,
+            )
+        ):
+            continue
+
         results.append(
             CyclingRouteCandidateAnalysis(
                 candidate=candidate,
                 best_training_window=best_training_window,
                 best_by_duration=analyses,
-                warmup=analyze_route_warmup(
-                    candidate.route,
-                    timeline,
-                    best_training_window.window,
-                ),
-                cooldown=analyze_route_cooldown(
-                    candidate.route,
-                    timeline,
-                    best_training_window.window,
-                ),
+                warmup=warmup,
+                cooldown=cooldown,
                 route_quality=calculate_cycling_route_quality_metrics(
                     candidate.route,
                     timeline,

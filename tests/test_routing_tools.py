@@ -11,6 +11,7 @@ from intervals_icu_mcp.tools.routing import (
     CyclingRouteCandidate,
     CyclingRouteCandidateAnalysis,
     CyclingRouteQualityMetrics,
+    CyclingSessionRequirements,
     GeocodeCandidate,
     LocationResolutionError,
     ResolvedLocation,
@@ -38,6 +39,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_extra_distributions,
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
+    cycling_session_meets_requirements,
     evaluate_cycling_route_candidates,
     extract_geocode_candidates,
     find_cycling_training_route_candidates,
@@ -2597,6 +2599,64 @@ def test_calculate_cycling_route_quality_metrics() -> None:
     assert metrics.sharp_turn_count == 1
 
 
+def test_cycling_session_requirements_filter_enabled_segments() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=20.0,
+        duration_s=20.0,
+    )
+    warmup = analyze_route_warmup(route, timeline, training_window)
+    cooldown = analyze_route_cooldown(route, timeline, training_window)
+
+    assert cycling_session_meets_requirements(
+        warmup,
+        cooldown,
+        CyclingSessionRequirements(
+            max_warmup_maneuvers_per_hour=0.0,
+            min_warmup_asphalt_percentage=100.0,
+            max_cooldown_elevation_gain_rate_m_per_hour=10_000.0,
+            max_cooldown_footway_percentage=0.0,
+        ),
+    )
+    assert not cycling_session_meets_requirements(
+        warmup,
+        cooldown,
+        CyclingSessionRequirements(max_warmup_gradient_percentage=-100.0),
+    )
+
+
+def test_cycling_session_requirements_reject_missing_enabled_segment() -> None:
+    assert not cycling_session_meets_requirements(
+        None,
+        None,
+        CyclingSessionRequirements(max_warmup_maneuvers_per_hour=5.0),
+    )
+    assert cycling_session_meets_requirements(
+        None,
+        None,
+        CyclingSessionRequirements(),
+    )
+
+
+def test_cycling_session_requirements_validate_values() -> None:
+    with pytest.raises(ValueError, match="percentage requirements"):
+        cycling_session_meets_requirements(
+            None,
+            None,
+            CyclingSessionRequirements(min_warmup_asphalt_percentage=101.0),
+        )
+
+    with pytest.raises(ValueError, match="rate requirements"):
+        cycling_session_meets_requirements(
+            None,
+            None,
+            CyclingSessionRequirements(max_cooldown_maneuvers_per_hour=-1.0),
+        )
+
+
 def test_training_window_comparison_metrics_requires_elevation() -> None:
     from types import SimpleNamespace
 
@@ -2836,6 +2896,8 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
     analyze_warmup = Mock(return_value=warmup)
     analyze_cooldown = Mock(return_value=cooldown)
     calculate_quality = Mock(return_value=route_quality)
+    session_requirements = object()
+    session_meets_requirements = Mock(return_value=True)
     monkeypatch.setattr(routing, "analyze_route_warmup", analyze_warmup)
     monkeypatch.setattr(routing, "analyze_route_cooldown", analyze_cooldown)
     monkeypatch.setattr(
@@ -2843,12 +2905,18 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
         "calculate_cycling_route_quality_metrics",
         calculate_quality,
     )
+    monkeypatch.setattr(
+        routing,
+        "cycling_session_meets_requirements",
+        session_meets_requirements,
+    )
 
     results = evaluate_cycling_route_candidates(
         candidates,
         start_time_min_s=1200.0,
         start_time_max_s=1800.0,
         durations_s=(1800.0,),
+        session_requirements=session_requirements,
     )
 
     assert len(results) == 1
@@ -2863,6 +2931,11 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
     analyze_warmup.assert_called_once_with(route, timeline, window)
     analyze_cooldown.assert_called_once_with(route, timeline, window)
     calculate_quality.assert_called_once_with(route, timeline)
+    session_meets_requirements.assert_called_once_with(
+        warmup,
+        cooldown,
+        session_requirements,
+    )
 
 
 def test_rank_cycling_route_candidates_prioritizes_best_window(
