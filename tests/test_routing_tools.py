@@ -8,6 +8,7 @@ from intervals_icu_mcp.auth import ICUConfig
 from intervals_icu_mcp.openrouteservice_client import OpenRouteServiceClient
 from intervals_icu_mcp.tools.routing import (
     CyclingRoute,
+    CyclingRouteCandidate,
     GeocodeCandidate,
     LocationResolutionError,
     ResolvedLocation,
@@ -32,6 +33,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
     extract_geocode_candidates,
+    generate_cycling_route_candidates,
     generate_training_window_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -855,6 +857,117 @@ async def test_build_cycling_route_calls_directions_and_parses() -> None:
             "suitability",
         ],
     )
+
+
+async def test_generate_cycling_route_candidates_uses_deterministic_seeds() -> None:
+    origin = _resolved_location(
+        "Start",
+        2.631246,
+        39.590265,
+    )
+
+    def response(distance_m: float) -> dict[str, object]:
+        return {
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.631246, 39.590265, 61.0],
+                            [2.700683, 39.694754, 216.0],
+                            [2.631246, 39.590265, 61.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": distance_m,
+                            "duration": 5000.0,
+                        },
+                        "way_points": [0, 2],
+                    },
+                }
+            ]
+        }
+
+    directions = AsyncMock(
+        side_effect=[
+            response(49_000.0),
+            response(50_000.0),
+            response(51_000.0),
+        ]
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.directions = directions  # type: ignore[method-assign]
+
+        candidates = await generate_cycling_route_candidates(
+            client,
+            origin,
+            target_distance_m=50_000.0,
+            candidate_count=3,
+            seed_start=10,
+        )
+
+    assert all(
+        isinstance(candidate, CyclingRouteCandidate)
+        for candidate in candidates
+    )
+    assert [candidate.candidate_id for candidate in candidates] == [
+        "round-trip-1",
+        "round-trip-2",
+        "round-trip-3",
+    ]
+    assert [candidate.seed for candidate in candidates] == [10, 11, 12]
+    assert [candidate.route.distance_m for candidate in candidates] == [
+        49_000.0,
+        50_000.0,
+        51_000.0,
+    ]
+
+    assert directions.await_count == 3
+
+    for call, seed in zip(
+        directions.await_args_list,
+        (10, 11, 12),
+        strict=True,
+    ):
+        assert call.args[0] == [[2.631246, 39.590265]]
+        assert call.kwargs["options"] == {
+            "round_trip": {
+                "length": 50_000.0,
+                "points": 5,
+                "seed": seed,
+            }
+        }
+
+
+async def test_generate_cycling_route_candidates_validates_inputs() -> None:
+    origin = _resolved_location("Start", 2.63, 39.59)
+
+    async with OpenRouteServiceClient(_config()) as client:
+        with pytest.raises(ValueError, match="target_distance_m"):
+            await generate_cycling_route_candidates(
+                client,
+                origin,
+                target_distance_m=0.0,
+                candidate_count=1,
+            )
+
+        with pytest.raises(ValueError, match="candidate_count"):
+            await generate_cycling_route_candidates(
+                client,
+                origin,
+                target_distance_m=50_000.0,
+                candidate_count=0,
+            )
+
+        with pytest.raises(ValueError, match="round_trip_points"):
+            await generate_cycling_route_candidates(
+                client,
+                origin,
+                target_distance_m=50_000.0,
+                candidate_count=1,
+                round_trip_points=0,
+            )
 
 
 async def test_build_cycling_route_supports_closed_route() -> None:

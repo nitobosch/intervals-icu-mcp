@@ -729,6 +729,17 @@ class CyclingRoute:
     extras: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class CyclingRouteCandidate:
+    """One generated cycling route and its generation metadata."""
+
+    candidate_id: str
+    strategy: str
+    seed: int
+    target_distance_m: float
+    route: CyclingRoute
+
+
 _EARTH_RADIUS_M = 6_371_008.8
 _ELEVATION_RESAMPLE_M = 25.0
 _ELEVATION_SMOOTHING_WINDOW_M = 200.0
@@ -1206,6 +1217,57 @@ async def build_cycling_route(
     )
 
     return parse_cycling_route_response(data)
+
+
+async def generate_cycling_route_candidates(
+    client: OpenRouteServiceClient,
+    origin: ResolvedLocation,
+    *,
+    target_distance_m: float,
+    candidate_count: int,
+    round_trip_points: int = 5,
+    seed_start: int = 0,
+) -> tuple[CyclingRouteCandidate, ...]:
+    """Generate deterministic road-cycling round-trip candidates."""
+
+    if target_distance_m <= 0:
+        raise ValueError("target_distance_m must be greater than zero")
+
+    if candidate_count < 1:
+        raise ValueError("candidate_count must be at least one")
+
+    if round_trip_points < 1:
+        raise ValueError("round_trip_points must be at least one")
+
+    candidates: list[CyclingRouteCandidate] = []
+
+    for index in range(candidate_count):
+        seed = seed_start + index
+        data = await client.directions(
+            [[origin.longitude, origin.latitude]],
+            profile="cycling-road",
+            elevation=True,
+            instructions=True,
+            extra_info=list(_ROUTING_EXTRA_INFO),
+            options={
+                "round_trip": {
+                    "length": target_distance_m,
+                    "points": round_trip_points,
+                    "seed": seed,
+                }
+            },
+        )
+        candidates.append(
+            CyclingRouteCandidate(
+                candidate_id=f"round-trip-{index + 1}",
+                strategy="ors_round_trip",
+                seed=seed,
+                target_distance_m=target_distance_m,
+                route=parse_cycling_route_response(data),
+            )
+        )
+
+    return tuple(candidates)
 
 
 @dataclass(frozen=True)
