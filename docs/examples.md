@@ -71,6 +71,16 @@ _Note: The athlete profile resource (`intervals-icu://athlete/profile`) automati
 
 > **Structured Workouts**: The server includes a complete workout syntax reference (`intervals-icu://workout-syntax`) that enables LLMs to generate valid structured workouts with proper power/HR/pace targets, zones, ramps, repeats, and cadence for cycling, running, and swimming.
 
+## Cycling Routing
+
+Requires `OPENROUTESERVICE_API_KEY`.
+
+```
+"Find the best continuous climbing block on a route from Son Moix through Bunyola, Orient, Alaró and Santa Maria del Camí"
+"Compare 20, 30 and 40 minute climbing windows starting 20 to 30 minutes into this route"
+"Find the best climbing window, require at least 90% asphalt, and limit descending to 20 vertical meters per hour"
+```
+
 ## Performance Analysis
 
 ```

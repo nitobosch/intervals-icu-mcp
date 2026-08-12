@@ -1,16 +1,16 @@
 # Tool, Resource, and Prompt Reference
 
-Complete inventory of everything the Intervals.icu MCP server exposes: up to 62 tools across 11 categories, 4 MCP Resources, and 7 MCP Prompts.
+Complete inventory of everything the Intervals.icu MCP server exposes: up to 64 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 MCP Resources, and 7 MCP Prompts.
 
 ## Delete Safety Mode
 
 Destructive tools are gated by the optional `INTERVALS_ICU_DELETE_MODE` env var. The gate sits **outside the model's reach** — tools that aren't registered cannot be invoked by any prompt or parameter.
 
-| Mode | Registered tools | Events | Activities | Gear | Sport settings | Custom items |
-|---|---|---|---|---|---|---|
-| `safe` (default) | 59 | tomorrow or later | ✗ | ✓ | ✗ | ✗ |
-| `full` | 62 | any date | ✓ | ✓ | ✓ | ✓ |
-| `none` | 56 | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Mode | Registered `icu_*` tools | Total incl. 4 Strava | Events | Activities | Gear | Sport settings | Custom items |
+|---|---:|---:|---|---|---|---|---|
+| `safe` (default) | 61 | 65 | tomorrow or later | ✗ | ✓ | ✗ | ✗ |
+| `full` | 64 | 68 | any date | ✓ | ✓ | ✓ | ✓ |
+| `none` | 58 | 62 | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 In `safe` mode, `icu_delete_event` and `icu_bulk_delete_events` return a uniform envelope showing what was deleted and what was skipped:
 
@@ -128,13 +128,14 @@ The threaded notes/comments shown under an activity — the user's own training 
 | `icu_get_fitness_summary` | Get detailed CTL/ATL/TSB analysis with training recommendations |
 | `icu_get_fitness_chart` | Get PMC time-series (CTL/ATL/TSB) over a date window, including future projections from planned workouts |
 
-### Wellness (3 tools)
+### Wellness (4 tools)
 
 | Tool                    | Description                                                         |
 | ----------------------- | ------------------------------------------------------------------- |
 | `icu_get_wellness_data`     | Get recent wellness metrics with trends (HRV, sleep, mood, fatigue) |
 | `icu_get_wellness_for_date` | Get complete wellness data for a specific date                      |
 | `icu_update_wellness`       | Update or create wellness data for a date                           |
+| `icu_get_recovery_analysis` | Analyze recovery readiness using wellness trends and recent training context |
 
 ### Events / Calendar (11 tools)
 
@@ -151,6 +152,32 @@ The threaded notes/comments shown under an activity — the user's own training 
 | `icu_bulk_delete_events`    | Delete multiple events in a single operation *(safe mode partitions into `deleted` / `skipped`)* |
 | `icu_duplicate_events`      | Duplicate one or more events with configurable copies and spacing |
 | `icu_apply_training_plan` | Apply an entire training plan (workout folder) onto the calendar |
+
+### Cycling Routing (1 tool)
+
+Requires `OPENROUTESERVICE_API_KEY`. `OPENROUTESERVICE_BASE_URL` is optional
+and defaults to `https://api.openrouteservice.org`.
+
+| Tool | Description |
+| --- | --- |
+| `icu_find_best_cycling_training_window` | Build a road-cycling route through ordered place names or coordinates and select the best continuous climbing-oriented training window |
+
+The tool compares multiple candidate durations (20/30/40 minutes by default)
+within a configurable start-time range. It returns a compact route summary,
+the best window for each eligible duration, and the best overall window using
+duration-normalized climbing metrics.
+
+Optional hard eligibility requirements can reject unsuitable windows before
+ranking:
+
+- minimum asphalt percentage
+- minimum road/cycleway percentage
+- minimum ORS cycling suitability >= 7 percentage
+- maximum footway percentage
+- maximum elevation-loss rate per hour
+- maximum maneuver rate per hour
+
+All eligibility thresholds are disabled by default.
 
 ### Performance / Curves (3 tools)
 
@@ -199,6 +226,18 @@ The user's personal additions to their account: custom charts on dashboards, cus
 | `icu_create_custom_item`    | Add a new custom chart, field, zones config, or dashboard panel            |
 | `icu_update_custom_item`    | Modify an existing custom addition (rename, reconfigure, change visibility)|
 | `icu_delete_custom_item`    | Permanently remove a custom addition *(only registered when `INTERVALS_ICU_DELETE_MODE=full`; data-bearing field types may cascade)* |
+
+### Direct Strava API (4 tools)
+
+These read-only tools use the optional direct Strava integration rather than
+the Intervals.icu API.
+
+| Tool | Description |
+| --- | --- |
+| `strava_get_starred_segments` | List starred Strava segments |
+| `strava_get_segment` | Get details for a Strava segment |
+| `strava_get_segment_efforts` | Get efforts recorded on a Strava segment |
+| `strava_get_segment_effort_streams` | Get streams for a specific Strava segment effort |
 
 ## MCP Resources
 

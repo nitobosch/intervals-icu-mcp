@@ -56,6 +56,19 @@ Before installation, obtain your Intervals.icu API key:
 1. Go to https://intervals.icu/settings → **Developer** → **Create API Key**.
 2. Copy the key, and note your **Athlete ID** from your profile URL (format: `i123456`).
 
+### Optional OpenRouteService API Key
+
+The cycling-routing tool `icu_find_best_cycling_training_window` uses OpenRouteService (ORS) to geocode locations, snap them to the road network, build a road-cycling route, and evaluate continuous training windows.
+
+Routing is optional and does not affect the other Intervals.icu tools. To enable it, add these variables to the same environment used by the MCP server:
+
+```bash
+OPENROUTESERVICE_API_KEY=your-openrouteservice-api-key
+OPENROUTESERVICE_BASE_URL=https://api.openrouteservice.org
+```
+
+`OPENROUTESERVICE_BASE_URL` is optional; the public ORS endpoint above is the default.
+
 ## Installation & Setup
 
 **Nothing to install separately if you use the recommended setup.** `uvx` (which ships with `uv`) automatically downloads and caches the `intervals-icu-mcp` package the first time your MCP client launches it — just paste the config snippet from [Client Configuration](#client-configuration) into your client and you're done.
@@ -207,27 +220,30 @@ Ask Claude to interact with your Intervals.icu data in natural language. A few s
 "How's my recovery this week? Show HRV and sleep trends"
 "Create a sweet spot cycling workout for tomorrow"
 "What's my 20-minute power and FTP?"
+"Find the best continuous climbing block on my cycling route"
 ```
 
 For the full catalogue of example prompts by category, see [docs/examples.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/examples.md).
 
 ## Available Tools
 
-62 tools, 4 resources, and 7 prompt templates. One-line summary below — full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
+Up to 64 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 resources, and 7 prompt templates. Default `safe` mode registers 65 tools total; `full` registers 68 and `none` registers 62. Full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
 
 | Category | Tools | Summary |
 |---|---|---|
-| [Activities](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activities-12-tools) | 12 | Query, search, update, delete, download activities |
+| [Activities](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activities-13-tools) | 13 | Query, search, update, delete, download activities |
 | [Activity Analysis](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activity-analysis-8-tools) | 8 | Streams, intervals, best efforts, histograms |
 | [Activity Messages](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activity-messages-2-tools) | 2 | Read and post notes/comments/coach feedback on activities |
-| [Athlete](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#athlete-3-tools) | 3 | Profile, CTL/ATL/TSB analysis, and fitness chart time-series |
-| [Wellness](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#wellness-3-tools) | 3 | HRV, sleep, recovery metrics |
+| [Athlete](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#athlete-4-tools) | 4 | Profile, CTL/ATL/TSB analysis, fitness chart time-series, and athlete discovery |
+| [Wellness](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#wellness-4-tools) | 4 | HRV, sleep, wellness data, and recovery analysis |
 | [Events / Calendar](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#events--calendar-11-tools) | 11 | Planned workouts, races, notes, ATP periodization (bulk ops supported) |
+| [Cycling Routing](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#cycling-routing-1-tool) | 1 | Build a road-cycling route and select the best continuous training window |
 | [Performance / Curves](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#performance--curves-3-tools) | 3 | Power, HR, and pace curves with zones |
 | [Workout Library](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#workout-library-2-tools) | 2 | Browse workout folders and training plans |
 | [Gear Management](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#gear-management-6-tools) | 6 | Track equipment and maintenance reminders |
 | [Sport Settings](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#sport-settings-5-tools) | 5 | FTP, FTHR, pace thresholds, and zones |
 | [Custom Items](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#custom-items-5-tools) | 5 | User customizations: custom charts, fields, zones, dashboard panels |
+| [Direct Strava API](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#direct-strava-api-4-tools) | 4 | Read starred segments, segment details, efforts, and effort streams |
 
 ## Delete Safety Mode
 
