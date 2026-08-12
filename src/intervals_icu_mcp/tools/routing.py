@@ -2295,3 +2295,35 @@ def find_best_training_window(
     ranked = rank_training_window_analyses(analyses)
 
     return ranked[0]
+
+
+def find_best_training_windows_by_duration(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    durations_s: tuple[float, ...],
+    step_s: float = 60.0,
+) -> tuple[RouteTrainingWindowAnalysis, ...]:
+    """Find the best training window independently for each duration."""
+
+    if not durations_s:
+        return ()
+
+    results: list[RouteTrainingWindowAnalysis] = []
+
+    for duration_s in durations_s:
+        best = find_best_training_window(
+            route,
+            timeline,
+            start_time_min_s=start_time_min_s,
+            start_time_max_s=start_time_max_s,
+            duration_s=duration_s,
+            step_s=step_s,
+        )
+
+        if best is not None:
+            results.append(best)
+
+    return tuple(results)

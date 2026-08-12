@@ -2118,3 +2118,110 @@ def test_find_best_training_window_returns_none_without_candidates(
     )
 
     assert best is None
+
+
+def test_find_best_training_windows_by_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = object()
+    timeline = object()
+
+    result_20 = object()
+    result_30 = object()
+    result_40 = object()
+
+    results_by_duration = {
+        1200.0: result_20,
+        1800.0: result_30,
+        2400.0: result_40,
+    }
+
+    def fake_find_best(
+        _route: object,
+        _timeline: object,
+        *,
+        start_time_min_s: float,
+        start_time_max_s: float,
+        duration_s: float,
+        step_s: float,
+    ) -> object:
+        assert start_time_min_s == 1200.0
+        assert start_time_max_s == 1800.0
+        assert step_s == 60.0
+        return results_by_duration[duration_s]
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_window",
+        fake_find_best,
+    )
+
+    results = routing.find_best_training_windows_by_duration(
+        route,
+        timeline,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 1800.0, 2400.0),
+        step_s=60.0,
+    )
+
+    assert results == (
+        result_20,
+        result_30,
+        result_40,
+    )
+
+
+def test_find_best_training_windows_by_duration_skips_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    result_20 = object()
+    calls = 0
+
+    def fake_find_best(
+        *_args: object,
+        duration_s: float,
+        **_kwargs: object,
+    ) -> object | None:
+        nonlocal calls
+        calls += 1
+
+        if duration_s == 1200.0:
+            return result_20
+
+        return None
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_window",
+        fake_find_best,
+    )
+
+    results = routing.find_best_training_windows_by_duration(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 2400.0),
+    )
+
+    assert calls == 2
+    assert results == (result_20,)
+
+
+def test_find_best_training_windows_by_duration_empty() -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    results = routing.find_best_training_windows_by_duration(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(),
+    )
+
+    assert results == ()
