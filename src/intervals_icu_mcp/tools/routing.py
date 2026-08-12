@@ -2261,6 +2261,15 @@ class RouteTrainingWindowAnalysis:
     interruptions: RouteWindowInterruptionMetrics
 
 
+@dataclass(frozen=True)
+class CyclingRouteCandidateAnalysis:
+    """Evaluation result for one generated cycling route candidate."""
+
+    candidate: CyclingRouteCandidate
+    best_training_window: RouteTrainingWindowAnalysis
+    best_by_duration: tuple[RouteTrainingWindowAnalysis, ...]
+
+
 def analyze_training_window(
     route: CyclingRoute,
     window: RouteTrainingWindow,
@@ -2659,6 +2668,46 @@ def find_best_training_window_across_durations(
     )
 
     return ranked[0]
+
+
+def evaluate_cycling_route_candidates(
+    candidates: tuple[CyclingRouteCandidate, ...],
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    durations_s: tuple[float, ...],
+    step_s: float = 60.0,
+    requirements: RouteTrainingWindowRequirements | None = None,
+) -> tuple[CyclingRouteCandidateAnalysis, ...]:
+    """Evaluate candidates with the existing training-window engine."""
+
+    results: list[CyclingRouteCandidateAnalysis] = []
+
+    for candidate in candidates:
+        timeline = calculate_route_timeline(candidate.route)
+        analyses = find_best_training_windows_by_duration(
+            candidate.route,
+            timeline,
+            start_time_min_s=start_time_min_s,
+            start_time_max_s=start_time_max_s,
+            durations_s=durations_s,
+            step_s=step_s,
+            requirements=requirements,
+        )
+
+        if not analyses:
+            continue
+
+        ranked = rank_training_windows_across_durations(analyses)
+        results.append(
+            CyclingRouteCandidateAnalysis(
+                candidate=candidate,
+                best_training_window=ranked[0],
+                best_by_duration=analyses,
+            )
+        )
+
+    return tuple(results)
 
 
 def _serialize_training_window_analysis(

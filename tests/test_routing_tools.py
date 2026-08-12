@@ -1,6 +1,6 @@
 """Tests for routing location helpers."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -9,6 +9,7 @@ from intervals_icu_mcp.openrouteservice_client import OpenRouteServiceClient
 from intervals_icu_mcp.tools.routing import (
     CyclingRoute,
     CyclingRouteCandidate,
+    CyclingRouteCandidateAnalysis,
     GeocodeCandidate,
     LocationResolutionError,
     ResolvedLocation,
@@ -32,6 +33,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_extra_distributions,
     calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
+    evaluate_cycling_route_candidates,
     extract_geocode_candidates,
     generate_cycling_route_candidates,
     generate_training_window_candidates,
@@ -2564,6 +2566,65 @@ def test_find_best_training_window_across_durations_returns_none(
     )
 
     assert best is None
+
+
+def test_evaluate_cycling_route_candidates_reuses_window_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    candidates = (
+        CyclingRouteCandidate(
+            candidate_id="round-trip-1",
+            strategy="ors_round_trip",
+            seed=0,
+            target_distance_m=50_000.0,
+            route=route,
+        ),
+        CyclingRouteCandidate(
+            candidate_id="round-trip-2",
+            strategy="ors_round_trip",
+            seed=1,
+            target_distance_m=50_000.0,
+            route=route,
+        ),
+    )
+    analysis = object()
+    timelines: list[CyclingRoute] = []
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_route_timeline",
+        lambda candidate_route: timelines.append(candidate_route) or object(),
+    )
+    find_mock = Mock(
+        side_effect=[(analysis,), ()]
+    )
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        find_mock,
+    )
+    monkeypatch.setattr(
+        routing,
+        "rank_training_windows_across_durations",
+        lambda analyses: analyses,
+    )
+
+    results = evaluate_cycling_route_candidates(
+        candidates,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1800.0,),
+    )
+
+    assert len(results) == 1
+    assert isinstance(results[0], CyclingRouteCandidateAnalysis)
+    assert results[0].candidate is candidates[0]
+    assert results[0].best_training_window is analysis
+    assert results[0].best_by_duration == (analysis,)
+    assert timelines == [route, route]
 
 
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:
