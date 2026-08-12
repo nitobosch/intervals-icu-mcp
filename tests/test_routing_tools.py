@@ -45,6 +45,7 @@ from intervals_icu_mcp.tools.routing import (
     deduplicate_cycling_route_candidates,
     evaluate_cycling_route_candidates,
     extract_geocode_candidates,
+    filter_cycling_route_candidates_by_duration,
     find_cycling_training_route_candidates,
     generate_cycling_route_candidates,
     generate_training_window_candidates,
@@ -974,6 +975,48 @@ def test_deduplicate_cycling_route_candidates_validates_threshold() -> None:
 
     with pytest.raises(ValueError, match="proximity_m"):
         deduplicate_cycling_route_candidates((), proximity_m=0.0)
+
+
+def test_filter_cycling_route_candidates_by_duration() -> None:
+    base = _route_for_extra_tests({})
+
+    def candidate(candidate_id: str, duration_s: float):
+        route = CyclingRoute(
+            distance_m=base.distance_m,
+            duration_s=duration_s,
+            elevation_gain_m=base.elevation_gain_m,
+            elevation_loss_m=base.elevation_loss_m,
+            ors_ascent_m=base.ors_ascent_m,
+            ors_descent_m=base.ors_descent_m,
+            geometry=base.geometry,
+            waypoint_indices=base.waypoint_indices,
+            segments=base.segments,
+            extras=base.extras,
+        )
+        return CyclingRouteCandidate(
+            candidate_id=candidate_id,
+            strategy="ors_round_trip",
+            seed=0,
+            target_distance_m=base.distance_m,
+            route=route,
+            target_duration_s=3600.0,
+        )
+
+    close = candidate("close", 3780.0)
+    far = candidate("far", 4500.0)
+
+    assert filter_cycling_route_candidates_by_duration(
+        (close, far),
+        target_duration_s=3600.0,
+        max_duration_deviation_percentage=10.0,
+    ) == (close,)
+    assert filter_cycling_route_candidates_by_duration(
+        (close, far),
+        target_duration_s=3600.0,
+    ) == (close, far)
+
+    with pytest.raises(ValueError, match="target_duration_s"):
+        filter_cycling_route_candidates_by_duration((), target_duration_s=0.0)
 
 
 async def test_generate_cycling_route_candidates_uses_deterministic_seeds() -> None:
@@ -3137,6 +3180,58 @@ def test_rank_cycling_route_candidates_uses_distance_tiebreaker(
     )
 
 
+def test_rank_cycling_route_candidates_uses_duration_before_distance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    base = _route_for_extra_tests({})
+    common_window = object()
+
+    def analyzed(
+        candidate_id: str,
+        duration_s: float,
+        distance_m: float,
+    ) -> CyclingRouteCandidateAnalysis:
+        route = CyclingRoute(
+            distance_m=distance_m,
+            duration_s=duration_s,
+            elevation_gain_m=base.elevation_gain_m,
+            elevation_loss_m=base.elevation_loss_m,
+            ors_ascent_m=base.ors_ascent_m,
+            ors_descent_m=base.ors_descent_m,
+            geometry=base.geometry,
+            waypoint_indices=base.waypoint_indices,
+            segments=base.segments,
+            extras=base.extras,
+        )
+        return CyclingRouteCandidateAnalysis(
+            candidate=CyclingRouteCandidate(
+                candidate_id=candidate_id,
+                strategy="ors_round_trip",
+                seed=0,
+                target_distance_m=2000.0,
+                route=route,
+                target_duration_s=3600.0,
+            ),
+            best_training_window=common_window,
+            best_by_duration=(),
+        )
+
+    duration_fit = analyzed("duration-fit", 3600.0, 2500.0)
+    distance_fit = analyzed("distance-fit", 4200.0, 2000.0)
+    monkeypatch.setattr(
+        routing,
+        "_cross_duration_training_window_rank_key",
+        lambda _analysis: (800.0, 4.0, -10.0, 95.0, 90.0, -8.0),
+    )
+
+    assert rank_cycling_route_candidates((distance_fit, duration_fit)) == (
+        duration_fit,
+        distance_fit,
+    )
+
+
 def test_rank_cycling_route_candidates_uses_session_quality_tiebreakers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3275,6 +3370,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
     assert result.ranked is ranked
     assert result.candidates_generated == 3
     assert result.candidates_after_distance_filter == 3
+    assert result.candidates_after_duration_filter == 3
     assert result.candidates_after_deduplication == 2
     generate.assert_awaited_once_with(
         client,
@@ -3284,6 +3380,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         round_trip_points=2,
         seed_start=0,
         max_distance_deviation_percentage=50.0,
+        target_duration_s=None,
     )
     evaluate.assert_called_once_with(
         deduplicated,
@@ -3321,6 +3418,7 @@ def test_serialize_cycling_route_candidate_analysis(
             seed=7,
             target_distance_m=2_500.0,
             route=route,
+            target_duration_s=route.duration_s + 60.0,
         ),
         best_training_window=best,
         best_by_duration=(best, other),
@@ -3360,6 +3458,12 @@ def test_serialize_cycling_route_candidate_analysis(
         "target_distance_meters": 2_500.0,
         "distance_deviation_meters": -500.0,
         "distance_deviation_percentage": -20.0,
+        "target_duration_seconds": route.duration_s + 60.0,
+        "target_duration_minutes": (route.duration_s + 60.0) / 60.0,
+        "duration_deviation_seconds": -60.0,
+        "duration_deviation_percentage": (
+            -60.0 / (route.duration_s + 60.0) * 100.0
+        ),
     }
     assert result["route"]["geometry"] == {
         "type": "LineString",
@@ -4111,6 +4215,7 @@ async def test_find_cycling_training_route_success(
             ranked=(first, second),
             candidates_generated=2,
             candidates_after_distance_filter=2,
+            candidates_after_duration_filter=2,
             candidates_after_deduplication=2,
         )
     )

@@ -738,6 +738,7 @@ class CyclingRouteCandidate:
     seed: int
     target_distance_m: float
     route: CyclingRoute
+    target_duration_s: float | None = None
 
 
 _EARTH_RADIUS_M = 6_371_008.8
@@ -946,6 +947,38 @@ def deduplicate_cycling_route_candidates(
         unique.append(candidate)
 
     return tuple(unique)
+
+
+def filter_cycling_route_candidates_by_duration(
+    candidates: tuple[CyclingRouteCandidate, ...],
+    *,
+    target_duration_s: float,
+    max_duration_deviation_percentage: float | None = None,
+) -> tuple[CyclingRouteCandidate, ...]:
+    """Filter candidates by optional deviation from an ORS duration estimate."""
+
+    if target_duration_s <= 0:
+        raise ValueError("target_duration_s must be greater than zero")
+    if (
+        max_duration_deviation_percentage is not None
+        and max_duration_deviation_percentage < 0
+    ):
+        raise ValueError(
+            "max_duration_deviation_percentage must not be negative"
+        )
+    if max_duration_deviation_percentage is None:
+        return candidates
+
+    return tuple(
+        candidate
+        for candidate in candidates
+        if (
+            abs(candidate.route.duration_s - target_duration_s)
+            / target_duration_s
+            * 100.0
+            <= max_duration_deviation_percentage
+        )
+    )
 
 
 def _resample_elevations(
@@ -1374,6 +1407,7 @@ async def generate_cycling_route_candidates(
     round_trip_points: int = 2,
     seed_start: int = 0,
     max_distance_deviation_percentage: float | None = 50.0,
+    target_duration_s: float | None = None,
 ) -> tuple[CyclingRouteCandidate, ...]:
     """Generate deterministic road-cycling round-trip candidates."""
 
@@ -1393,6 +1427,8 @@ async def generate_cycling_route_candidates(
         raise ValueError(
             "max_distance_deviation_percentage must not be negative"
         )
+    if target_duration_s is not None and target_duration_s <= 0:
+        raise ValueError("target_duration_s must be greater than zero")
 
     candidates: list[CyclingRouteCandidate] = []
 
@@ -1433,6 +1469,7 @@ async def generate_cycling_route_candidates(
                 seed=seed,
                 target_distance_m=target_distance_m,
                 route=route,
+                target_duration_s=target_duration_s,
             )
         )
 
@@ -3195,12 +3232,19 @@ def _cycling_route_candidate_rank_key(
     distance_deviation_ratio = abs(
         candidate.route.distance_m - candidate.target_distance_m
     ) / candidate.target_distance_m
+    duration_deviation_ratio = (
+        abs(candidate.route.duration_s - candidate.target_duration_s)
+        / candidate.target_duration_s
+        if candidate.target_duration_s is not None
+        else 0.0
+    )
 
     return (
         *window_key,
         *warmup_key,
         *cooldown_key,
         *route_quality_key,
+        -duration_deviation_ratio,
         -distance_deviation_ratio,
         -float(candidate.seed),
     )
@@ -3283,6 +3327,7 @@ class CyclingRouteCandidateSearchResult:
     ranked: tuple[CyclingRouteCandidateAnalysis, ...]
     candidates_generated: int
     candidates_after_distance_filter: int
+    candidates_after_duration_filter: int
     candidates_after_deduplication: int
 
 
@@ -3299,6 +3344,8 @@ async def find_cycling_training_route_candidates(
     round_trip_points: int = 2,
     seed_start: int = 0,
     max_distance_deviation_percentage: float | None = 50.0,
+    target_duration_s: float | None = None,
+    max_duration_deviation_percentage: float | None = None,
     deduplication_overlap_threshold_percentage: float | None = 90.0,
     deduplication_resample_spacing_m: float = 100.0,
     deduplication_proximity_m: float = 50.0,
@@ -3317,8 +3364,18 @@ async def find_cycling_training_route_candidates(
         max_distance_deviation_percentage=(
             max_distance_deviation_percentage
         ),
+        target_duration_s=target_duration_s,
     )
     candidates_after_distance_filter = len(candidates)
+    if target_duration_s is not None:
+        candidates = filter_cycling_route_candidates_by_duration(
+            candidates,
+            target_duration_s=target_duration_s,
+            max_duration_deviation_percentage=(
+                max_duration_deviation_percentage
+            ),
+        )
+    candidates_after_duration_filter = len(candidates)
     if deduplication_overlap_threshold_percentage is not None:
         candidates = deduplicate_cycling_route_candidates(
             candidates,
@@ -3343,6 +3400,7 @@ async def find_cycling_training_route_candidates(
         ranked=rank_cycling_route_candidates(analyses),
         candidates_generated=candidate_count,
         candidates_after_distance_filter=candidates_after_distance_filter,
+        candidates_after_duration_filter=candidates_after_duration_filter,
         candidates_after_deduplication=candidates_after_deduplication,
     )
 
@@ -3355,6 +3413,11 @@ def serialize_cycling_route_candidate_analysis(
     candidate = analysis.candidate
     route = candidate.route
     distance_deviation_m = route.distance_m - candidate.target_distance_m
+    duration_deviation_s = (
+        route.duration_s - candidate.target_duration_s
+        if candidate.target_duration_s is not None
+        else None
+    )
 
     return {
         "candidate_id": candidate.candidate_id,
@@ -3365,6 +3428,19 @@ def serialize_cycling_route_candidate_analysis(
             "distance_deviation_meters": distance_deviation_m,
             "distance_deviation_percentage": (
                 distance_deviation_m / candidate.target_distance_m * 100.0
+            ),
+            "target_duration_seconds": candidate.target_duration_s,
+            "target_duration_minutes": (
+                candidate.target_duration_s / 60.0
+                if candidate.target_duration_s is not None
+                else None
+            ),
+            "duration_deviation_seconds": duration_deviation_s,
+            "duration_deviation_percentage": (
+                duration_deviation_s / candidate.target_duration_s * 100.0
+                if duration_deviation_s is not None
+                and candidate.target_duration_s is not None
+                else None
             ),
         },
         "route": {
