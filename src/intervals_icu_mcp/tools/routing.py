@@ -2181,3 +2181,43 @@ def generate_training_window_candidates(
         start_time_s += step_s
 
     return tuple(candidates)
+
+
+@dataclass(frozen=True)
+class RouteTrainingWindowAnalysis:
+    """Complete analysis of one candidate training window."""
+
+    window: RouteTrainingWindow
+    quality: RouteQualityMetrics
+    interruptions: RouteWindowInterruptionMetrics
+
+
+def analyze_training_window(
+    route: CyclingRoute,
+    window: RouteTrainingWindow,
+) -> RouteTrainingWindowAnalysis:
+    """Calculate all evaluation metrics for one training window."""
+
+    return RouteTrainingWindowAnalysis(
+        window=window,
+        quality=calculate_training_window_quality_metrics(
+            route,
+            window,
+        ),
+        interruptions=calculate_training_window_interruption_metrics(
+            route,
+            window,
+        ),
+    )
+
+
+def analyze_training_window_candidates(
+    route: CyclingRoute,
+    windows: tuple[RouteTrainingWindow, ...],
+) -> tuple[RouteTrainingWindowAnalysis, ...]:
+    """Analyze a sequence of candidate training windows."""
+
+    return tuple(
+        analyze_training_window(route, window)
+        for window in windows
+    )

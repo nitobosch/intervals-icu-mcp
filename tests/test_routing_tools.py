@@ -1903,3 +1903,53 @@ def test_generate_training_window_candidates_rejects_invalid_step() -> None:
             duration_s=10.0,
             step_s=0.0,
         )
+
+
+def test_analyze_training_window_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = object()
+    window_1 = object()
+    window_2 = object()
+    quality = object()
+    interruptions = object()
+
+    def fake_quality(
+        _route: object,
+        _window: object,
+    ) -> object:
+        return quality
+
+    def fake_interruptions(
+        _route: object,
+        _window: object,
+    ) -> object:
+        return interruptions
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_training_window_quality_metrics",
+        fake_quality,
+    )
+    monkeypatch.setattr(
+        routing,
+        "calculate_training_window_interruption_metrics",
+        fake_interruptions,
+    )
+
+    analyses = routing.analyze_training_window_candidates(
+        route,
+        (window_1, window_2),
+    )
+
+    assert len(analyses) == 2
+
+    assert analyses[0].window is window_1
+    assert analyses[0].quality is quality
+    assert analyses[0].interruptions is interruptions
+
+    assert analyses[1].window is window_2
+    assert analyses[1].quality is quality
+    assert analyses[1].interruptions is interruptions
