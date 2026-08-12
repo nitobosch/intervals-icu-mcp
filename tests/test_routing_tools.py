@@ -56,6 +56,7 @@ from intervals_icu_mcp.tools.routing import (
     extract_geocode_candidates,
     filter_cycling_route_candidates_by_duration,
     find_cycling_training_route_candidates,
+    find_training_block_sequences,
     generate_cycling_route_candidates,
     generate_training_window_candidates,
     geocode_location_candidates,
@@ -3040,6 +3041,85 @@ def test_analyze_training_block_sequence_validates_spec(
 
     with pytest.raises(ValueError, match=message):
         analyze_training_block_sequence(route, timeline, (), spec)
+
+
+def test_find_training_block_sequences_uses_bounded_backtracking() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    spec = TrainingBlockSpec(
+        work_duration_s=20.0,
+        repetitions=2,
+        recovery_min_s=0.0,
+        recovery_max_s=20.0,
+    )
+
+    sequences = find_training_block_sequences(
+        route,
+        timeline,
+        spec,
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        step_s=20.0,
+        max_sequences=2,
+    )
+
+    assert len(sequences) == 2
+    assert [
+        tuple(block.window.start.time_s for block in sequence.work_blocks)
+        for sequence in sequences
+    ] == [(0.0, 20.0), (0.0, 40.0)]
+    assert all(sequence.spec is spec for sequence in sequences)
+
+
+def test_find_training_block_sequences_filters_ineligible_windows() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+
+    ineligible_route = replace(
+        route,
+        extras={
+            **route.extras,
+            "surface": {"values": [[0, 3, 0]]},
+        },
+    )
+    assert not find_training_block_sequences(
+        ineligible_route,
+        timeline,
+        TrainingBlockSpec(work_duration_s=20.0, repetitions=2),
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        step_s=20.0,
+        requirements=RouteTrainingWindowRequirements(
+            min_asphalt_percentage=100.0,
+        ),
+    )
+
+    assert find_training_block_sequences(
+        route,
+        timeline,
+        TrainingBlockSpec(work_duration_s=20.0, repetitions=2),
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        step_s=20.0,
+        requirements=RouteTrainingWindowRequirements(
+            min_asphalt_percentage=90.0,
+        ),
+    )
+
+
+def test_find_training_block_sequences_validates_limit() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(ValueError, match="max_sequences"):
+        find_training_block_sequences(
+            route,
+            timeline,
+            TrainingBlockSpec(work_duration_s=20.0, repetitions=2),
+            start_time_min_s=0.0,
+            start_time_max_s=40.0,
+            max_sequences=0,
+        )
 
 
 def test_cycling_session_requirements_filter_enabled_segments() -> None:

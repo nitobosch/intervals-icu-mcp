@@ -3284,6 +3284,97 @@ def analyze_training_block_sequence(
     )
 
 
+def find_training_block_sequences(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    spec: TrainingBlockSpec,
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    step_s: float = 60.0,
+    requirements: RouteTrainingWindowRequirements | None = None,
+    max_sequences: int = 100,
+) -> tuple[TrainingBlockSequenceAnalysis, ...]:
+    """Find repeated work-block sequences with bounded chronological search."""
+
+    _validate_training_block_spec(spec)
+    if max_sequences < 1:
+        raise ValueError("max_sequences must be at least one")
+
+    windows = generate_training_window_candidates(
+        route,
+        timeline,
+        start_time_min_s=start_time_min_s,
+        start_time_max_s=start_time_max_s,
+        duration_s=spec.work_duration_s,
+        step_s=step_s,
+    )
+    analyses = analyze_training_window_candidates(route, windows)
+    if requirements is not None:
+        analyses = filter_training_window_analyses(analyses, requirements)
+
+    unique_analyses: list[RouteTrainingWindowAnalysis] = []
+    seen_ranges: set[tuple[int, int]] = set()
+    for analysis in analyses:
+        geometry_range = (
+            analysis.window.start.geometry_index,
+            analysis.window.end.geometry_index,
+        )
+        if geometry_range in seen_ranges:
+            continue
+        seen_ranges.add(geometry_range)
+        unique_analyses.append(analysis)
+
+    results: list[TrainingBlockSequenceAnalysis] = []
+
+    def search(
+        selected: tuple[RouteTrainingWindowAnalysis, ...],
+        next_index: int,
+    ) -> None:
+        if len(results) >= max_sequences:
+            return
+        if len(selected) == spec.repetitions:
+            results.append(
+                analyze_training_block_sequence(
+                    route,
+                    timeline,
+                    selected,
+                    spec,
+                    requirements=requirements,
+                )
+            )
+            return
+
+        remaining_needed = spec.repetitions - len(selected)
+        last_start_index = len(unique_analyses) - remaining_needed
+        for index in range(next_index, last_start_index + 1):
+            candidate = unique_analyses[index]
+            if selected:
+                previous = selected[-1].window
+                recovery_duration_s = (
+                    candidate.window.start.time_s - previous.end.time_s
+                )
+                if recovery_duration_s < 0:
+                    continue
+                if (
+                    spec.recovery_min_s is not None
+                    and recovery_duration_s < spec.recovery_min_s
+                ):
+                    continue
+                if (
+                    spec.recovery_max_s is not None
+                    and recovery_duration_s > spec.recovery_max_s
+                ):
+                    break
+
+            search((*selected, candidate), index + 1)
+            if len(results) >= max_sequences:
+                return
+
+    search((), 0)
+    return tuple(results)
+
+
 def analyze_route_warmup(
     route: CyclingRoute,
     timeline: RouteTimeline,
