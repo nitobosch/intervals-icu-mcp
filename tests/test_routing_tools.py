@@ -10,6 +10,7 @@ from intervals_icu_mcp.tools.routing import (
     CyclingRoute,
     CyclingRouteCandidate,
     CyclingRouteCandidateAnalysis,
+    CyclingRouteQualityMetrics,
     GeocodeCandidate,
     LocationResolutionError,
     ResolvedLocation,
@@ -26,6 +27,7 @@ from intervals_icu_mcp.tools.routing import (
     analyze_route_cooldown,
     analyze_route_warmup,
     build_cycling_route,
+    calculate_cycling_route_quality_metrics,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
     calculate_extra_distribution_for_geometry_range,
@@ -2430,10 +2432,20 @@ def _route_for_session_segment_tests() -> CyclingRoute:
     base_route = _route_for_timeline_tests(
         [
             {
-                "duration": 60.0,
-                "way_points": [0, 3],
+                "duration": 20.0,
+                "way_points": [0, 1],
                 "type": 6,
-            }
+            },
+            {
+                "duration": 20.0,
+                "way_points": [1, 2],
+                "type": 2,
+            },
+            {
+                "duration": 20.0,
+                "way_points": [2, 3],
+                "type": 7,
+            },
         ]
     )
 
@@ -2556,6 +2568,30 @@ def test_analyze_route_cooldown_returns_none_at_route_end() -> None:
         timeline,
         training_window,
     ) is None
+
+
+def test_calculate_cycling_route_quality_metrics() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+
+    metrics = calculate_cycling_route_quality_metrics(route, timeline)
+
+    assert isinstance(metrics, CyclingRouteQualityMetrics)
+    assert metrics.total_distance_m == pytest.approx(route.distance_m)
+    assert metrics.total_duration_s == pytest.approx(route.duration_s)
+    assert metrics.elevation_gain_m == pytest.approx(route.elevation_gain_m)
+    assert metrics.elevation_loss_m == pytest.approx(route.elevation_loss_m)
+    assert metrics.asphalt_percentage == pytest.approx(100.0)
+    assert metrics.unknown_surface_percentage == pytest.approx(0.0)
+    assert metrics.road_or_cycleway_percentage == pytest.approx(100.0)
+    assert metrics.footway_percentage == pytest.approx(0.0)
+    assert metrics.suitability_7_plus_percentage == pytest.approx(100.0)
+    assert metrics.suitability_8_plus_percentage == pytest.approx(100.0)
+    assert metrics.incline_7_plus_percentage == pytest.approx(0.0)
+    assert metrics.incline_10_plus_percentage == pytest.approx(0.0)
+    assert metrics.decline_7_plus_percentage == pytest.approx(0.0)
+    assert metrics.decline_10_plus_percentage == pytest.approx(0.0)
+    assert metrics.maneuver_count == 2
 
 
 def test_training_window_comparison_metrics_requires_elevation() -> None:

@@ -2230,6 +2230,66 @@ def calculate_training_window_interruption_metrics(
     )
 
 
+@dataclass(frozen=True)
+class CyclingRouteQualityMetrics:
+    """Quality metrics covering one complete cycling route."""
+
+    total_distance_m: float
+    total_duration_s: float
+    elevation_gain_m: float | None
+    elevation_loss_m: float | None
+
+    asphalt_percentage: float
+    unknown_surface_percentage: float
+    road_or_cycleway_percentage: float
+    footway_percentage: float
+    suitability_7_plus_percentage: float
+    suitability_8_plus_percentage: float
+    incline_7_plus_percentage: float
+    incline_10_plus_percentage: float
+    decline_7_plus_percentage: float
+    decline_10_plus_percentage: float
+
+    maneuver_count: int
+
+
+def calculate_cycling_route_quality_metrics(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+) -> CyclingRouteQualityMetrics:
+    """Summarize totals, quality and interruptions for a complete route."""
+
+    quality = calculate_route_quality_metrics(route)
+    complete_route = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=timeline.duration_s,
+    )
+    interruptions = calculate_training_window_interruption_metrics(
+        route,
+        complete_route,
+    )
+
+    return CyclingRouteQualityMetrics(
+        total_distance_m=route.distance_m,
+        total_duration_s=route.duration_s,
+        elevation_gain_m=route.elevation_gain_m,
+        elevation_loss_m=route.elevation_loss_m,
+        asphalt_percentage=quality.asphalt_percentage,
+        unknown_surface_percentage=quality.unknown_surface_percentage,
+        road_or_cycleway_percentage=quality.road_or_cycleway_percentage,
+        footway_percentage=quality.footway_percentage,
+        suitability_7_plus_percentage=quality.suitability_7_plus_percentage,
+        suitability_8_plus_percentage=quality.suitability_8_plus_percentage,
+        incline_7_plus_percentage=quality.incline_7_plus_percentage,
+        incline_10_plus_percentage=quality.incline_10_plus_percentage,
+        decline_7_plus_percentage=quality.decline_7_plus_percentage,
+        decline_10_plus_percentage=quality.decline_10_plus_percentage,
+        maneuver_count=interruptions.maneuver_count,
+    )
+
+
 def generate_training_window_candidates(
     route: CyclingRoute,
     timeline: RouteTimeline,
