@@ -2585,6 +2585,16 @@ class RouteTrainingWindowComparisonMetrics:
     maneuvers_per_hour: float
 
 
+@dataclass(frozen=True)
+class RouteSessionSegmentAnalysis:
+    """Semantic analysis of one time-bounded cycling session segment."""
+
+    segment: RouteTrainingWindow
+    quality: RouteQualityMetrics
+    interruptions: RouteWindowInterruptionMetrics
+    comparison: RouteTrainingWindowComparisonMetrics
+
+
 def calculate_training_window_comparison_metrics(
     analysis: RouteTrainingWindowAnalysis,
 ) -> RouteTrainingWindowComparisonMetrics:
@@ -2624,6 +2634,36 @@ def calculate_training_window_comparison_metrics(
         ),
         maneuvers_per_hour=(
             analysis.interruptions.maneuver_count / duration_hours
+        ),
+    )
+
+
+def analyze_route_warmup(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    training_window: RouteTrainingWindow,
+) -> RouteSessionSegmentAnalysis | None:
+    """Analyze the route segment before a selected training window."""
+
+    warmup_duration_s = training_window.start.time_s
+
+    if warmup_duration_s <= 0:
+        return None
+
+    segment = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=warmup_duration_s,
+    )
+    analysis = analyze_training_window(route, segment)
+
+    return RouteSessionSegmentAnalysis(
+        segment=analysis.window,
+        quality=analysis.quality,
+        interruptions=analysis.interruptions,
+        comparison=calculate_training_window_comparison_metrics(
+            analysis
         ),
     )
 

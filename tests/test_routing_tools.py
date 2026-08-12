@@ -18,10 +18,12 @@ from intervals_icu_mcp.tools.routing import (
     RouteExtraValue,
     RouteParsingError,
     RouteQualityMetrics,
+    RouteSessionSegmentAnalysis,
     RouteTimeline,
     RouteTimelinePoint,
     RouteTrainingWindow,
     RouteWindowInterruptionMetrics,
+    analyze_route_warmup,
     build_cycling_route,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
@@ -2421,6 +2423,82 @@ def test_training_window_comparison_metrics() -> None:
     assert metrics.maneuvers_per_hour == pytest.approx(
         6.0
     )
+
+
+def test_analyze_route_warmup_reuses_window_metrics() -> None:
+    base_route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 60.0,
+                "way_points": [0, 3],
+                "type": 6,
+            }
+        ]
+    )
+    route = CyclingRoute(
+        distance_m=base_route.distance_m,
+        duration_s=base_route.duration_s,
+        elevation_gain_m=base_route.elevation_gain_m,
+        elevation_loss_m=base_route.elevation_loss_m,
+        ors_ascent_m=base_route.ors_ascent_m,
+        ors_descent_m=base_route.ors_descent_m,
+        geometry=base_route.geometry,
+        waypoint_indices=base_route.waypoint_indices,
+        segments=base_route.segments,
+        extras={
+            "surface": {"values": [[0, 3, 3]]},
+            "waytype": {"values": [[0, 3, 2]]},
+            "steepness": {"values": [[0, 3, 1]]},
+            "suitability": {"values": [[0, 3, 8]]},
+        },
+    )
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=20.0,
+        duration_s=20.0,
+    )
+
+    warmup = analyze_route_warmup(
+        route,
+        timeline,
+        training_window,
+    )
+
+    assert isinstance(warmup, RouteSessionSegmentAnalysis)
+    assert warmup.segment.start.time_s == pytest.approx(0.0)
+    assert warmup.segment.end.time_s == pytest.approx(20.0)
+    assert warmup.segment.duration_s == pytest.approx(20.0)
+    assert warmup.segment.distance_m > 0
+    assert warmup.segment.elevation_gain_m is not None
+    assert warmup.segment.elevation_loss_m is not None
+    assert warmup.quality.asphalt_percentage == pytest.approx(100.0)
+    assert warmup.quality.road_or_cycleway_percentage == pytest.approx(100.0)
+    assert warmup.quality.footway_percentage == pytest.approx(0.0)
+    assert warmup.quality.suitability_7_plus_percentage == pytest.approx(100.0)
+    assert warmup.comparison.elevation_gain_rate_m_per_hour >= 0
+    assert warmup.comparison.elevation_loss_rate_m_per_hour >= 0
+    assert warmup.comparison.maneuvers_per_hour >= 0
+
+
+def test_analyze_route_warmup_returns_none_at_route_start() -> None:
+    route = _route_for_timeline_tests(
+        [{"duration": 60.0, "way_points": [0, 3]}]
+    )
+    timeline = calculate_route_timeline(route)
+    training_window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=20.0,
+    )
+
+    assert analyze_route_warmup(
+        route,
+        timeline,
+        training_window,
+    ) is None
 
 
 def test_training_window_comparison_metrics_requires_elevation() -> None:
