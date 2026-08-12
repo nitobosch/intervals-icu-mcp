@@ -12,9 +12,15 @@ from intervals_icu_mcp.tools.routing import (
     LocationResolutionError,
     ResolvedLocation,
     RouteCoordinate,
+    RouteExtraDistribution,
+    RouteExtraValue,
     RouteParsingError,
+    RouteQualityMetrics,
     build_cycling_route,
     calculate_elevation_gain_loss,
+    calculate_extra_distribution,
+    calculate_route_extra_distributions,
+    calculate_route_quality_metrics,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -968,3 +974,238 @@ def test_proximity_does_not_resolve_close_locality_matches() -> None:
             "Example",
             candidates,
         )
+
+
+def _route_for_extra_tests(
+    extras: dict[str, object],
+) -> CyclingRoute:
+    return CyclingRoute(
+        distance_m=2000.0,
+        duration_s=300.0,
+        elevation_gain_m=0.0,
+        elevation_loss_m=0.0,
+        ors_ascent_m=None,
+        ors_descent_m=None,
+        geometry=(
+            RouteCoordinate(2.600, 39.500, 100.0),
+            RouteCoordinate(2.610, 39.500, 100.0),
+            RouteCoordinate(2.620, 39.500, 100.0),
+        ),
+        waypoint_indices=(0, 2),
+        segments=(),
+        extras=extras,
+    )
+
+
+def test_extra_distribution_uses_geometry_distance() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [
+                    [0, 1, 3],
+                    [1, 2, 1],
+                ]
+            }
+        }
+    )
+
+    result = calculate_extra_distribution(
+        route,
+        "surface",
+    )
+
+    assert isinstance(result, RouteExtraDistribution)
+    assert result.unclassified_distance_m == pytest.approx(0.0)
+
+    values = {
+        item.value: item
+        for item in result.values
+    }
+
+    assert isinstance(values[3], RouteExtraValue)
+
+    assert values[3].percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert values[1].percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+
+
+def test_extra_distribution_reports_unclassified_distance() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [
+                    [0, 1, 3],
+                ]
+            }
+        }
+    )
+
+    result = calculate_extra_distribution(
+        route,
+        "surface",
+    )
+
+    assert result.classified_distance_m == pytest.approx(
+        result.geometry_distance_m / 2.0,
+        rel=0.01,
+    )
+    assert result.unclassified_distance_m == pytest.approx(
+        result.geometry_distance_m / 2.0,
+        rel=0.01,
+    )
+
+
+def test_missing_extra_is_fully_unclassified() -> None:
+    route = _route_for_extra_tests({})
+
+    result = calculate_extra_distribution(
+        route,
+        "surface",
+    )
+
+    assert result.values == ()
+    assert result.classified_distance_m == 0.0
+    assert result.unclassified_distance_m == pytest.approx(
+        result.geometry_distance_m
+    )
+
+
+def test_extra_distribution_rejects_invalid_indices() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [
+                    [0, 99, 3],
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(
+        RouteParsingError,
+        match="out-of-range surface interval",
+    ):
+        calculate_extra_distribution(
+            route,
+            "surface",
+        )
+
+
+def test_calculate_all_route_extra_distributions() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [[0, 2, 3]]
+            },
+            "waytype": {
+                "values": [[0, 2, 2]]
+            },
+            "steepness": {
+                "values": [[0, 2, 1]]
+            },
+            "suitability": {
+                "values": [[0, 2, 8]]
+            },
+        }
+    )
+
+    distributions = calculate_route_extra_distributions(
+        route
+    )
+
+    assert set(distributions) == {
+        "surface",
+        "waytype",
+        "steepness",
+        "suitability",
+    }
+
+    assert distributions["surface"].values[0].value == 3
+    assert distributions["waytype"].values[0].value == 2
+    assert distributions["steepness"].values[0].value == 1
+    assert distributions["suitability"].values[0].value == 8
+
+
+def test_calculate_route_quality_metrics() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [
+                    [0, 1, 3],
+                    [1, 2, 0],
+                ]
+            },
+            "waytype": {
+                "values": [
+                    [0, 1, 2],
+                    [1, 2, 7],
+                ]
+            },
+            "suitability": {
+                "values": [
+                    [0, 1, 8],
+                    [1, 2, 6],
+                ]
+            },
+            "steepness": {
+                "values": [
+                    [0, 1, 4],
+                    [1, 2, -4],
+                ]
+            },
+        }
+    )
+
+    metrics = calculate_route_quality_metrics(route)
+
+    assert isinstance(metrics, RouteQualityMetrics)
+
+    assert metrics.asphalt_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert metrics.unknown_surface_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+
+    assert metrics.road_or_cycleway_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert metrics.footway_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+
+    assert metrics.suitability_7_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert metrics.suitability_8_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+
+    assert metrics.incline_7_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert metrics.incline_10_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+
+    assert metrics.decline_7_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )
+    assert metrics.decline_10_plus_percentage == pytest.approx(
+        50.0,
+        abs=0.1,
+    )

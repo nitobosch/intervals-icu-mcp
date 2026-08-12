@@ -1199,3 +1199,289 @@ async def build_cycling_route(
     )
 
     return parse_cycling_route_response(data)
+
+
+@dataclass(frozen=True)
+class RouteExtraValue:
+    """Distance covered by one ORS extra-info value."""
+
+    value: int
+    distance_m: float
+    percentage: float
+
+
+@dataclass(frozen=True)
+class RouteExtraDistribution:
+    """Distance-weighted distribution for one ORS extra-info category."""
+
+    name: str
+    geometry_distance_m: float
+    classified_distance_m: float
+    unclassified_distance_m: float
+    values: tuple[RouteExtraValue, ...]
+
+
+def calculate_extra_distribution(
+    route: CyclingRoute,
+    extra_name: str,
+) -> RouteExtraDistribution:
+    """Calculate an ORS extra-info distribution using real geometry distance."""
+
+    cumulative = _geometry_cumulative_distances(
+        route.geometry
+    )
+
+    geometry_distance_m = (
+        cumulative[-1]
+        if cumulative
+        else 0.0
+    )
+
+    raw_extra = route.extras.get(extra_name)
+
+    if not isinstance(raw_extra, dict):
+        return RouteExtraDistribution(
+            name=extra_name,
+            geometry_distance_m=geometry_distance_m,
+            classified_distance_m=0.0,
+            unclassified_distance_m=geometry_distance_m,
+            values=(),
+        )
+
+    extra = cast(dict[str, Any], raw_extra)
+    raw_values = extra.get("values")
+
+    if not isinstance(raw_values, list):
+        return RouteExtraDistribution(
+            name=extra_name,
+            geometry_distance_m=geometry_distance_m,
+            classified_distance_m=0.0,
+            unclassified_distance_m=geometry_distance_m,
+            values=(),
+        )
+
+    value_ranges = cast(list[Any], raw_values)
+
+    parsed_ranges: list[tuple[int, int, int]] = []
+
+    for raw_range in value_ranges:
+        if not isinstance(raw_range, list):
+            raise RouteParsingError(
+                f"OpenRouteService returned an invalid {extra_name} range."
+            )
+
+        range_items = cast(list[Any], raw_range)
+
+        if len(range_items) < 3:
+            raise RouteParsingError(
+                f"OpenRouteService returned an incomplete {extra_name} range."
+            )
+
+        start_value = _numeric_value(range_items[0])
+        end_value = _numeric_value(range_items[1])
+        category_value = _numeric_value(range_items[2])
+
+        if (
+            start_value is None
+            or end_value is None
+            or category_value is None
+            or not start_value.is_integer()
+            or not end_value.is_integer()
+            or not category_value.is_integer()
+        ):
+            raise RouteParsingError(
+                f"OpenRouteService returned a non-integer {extra_name} range."
+            )
+
+        start_index = int(start_value)
+        end_index = int(end_value)
+        value = int(category_value)
+
+        if (
+            start_index < 0
+            or end_index < start_index
+            or end_index >= len(route.geometry)
+        ):
+            raise RouteParsingError(
+                f"OpenRouteService returned an out-of-range {extra_name} interval."
+            )
+
+        parsed_ranges.append(
+            (
+                start_index,
+                end_index,
+                value,
+            )
+        )
+
+    parsed_ranges.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        )
+    )
+
+    previous_end: int | None = None
+
+    for start_index, end_index, _ in parsed_ranges:
+        if (
+            previous_end is not None
+            and start_index < previous_end
+        ):
+            raise RouteParsingError(
+                f"OpenRouteService returned overlapping {extra_name} ranges."
+            )
+
+        previous_end = end_index
+
+    distances_by_value: dict[int, float] = {}
+    classified_distance_m = 0.0
+
+    for start_index, end_index, value in parsed_ranges:
+        distance_m = (
+            cumulative[end_index]
+            - cumulative[start_index]
+        )
+
+        classified_distance_m += distance_m
+
+        distances_by_value[value] = (
+            distances_by_value.get(value, 0.0)
+            + distance_m
+        )
+
+    values = tuple(
+        RouteExtraValue(
+            value=value,
+            distance_m=distance_m,
+            percentage=(
+                distance_m / geometry_distance_m * 100.0
+                if geometry_distance_m > 0
+                else 0.0
+            ),
+        )
+        for value, distance_m in sorted(
+            distances_by_value.items()
+        )
+    )
+
+    unclassified_distance_m = max(
+        0.0,
+        geometry_distance_m - classified_distance_m,
+    )
+
+    return RouteExtraDistribution(
+        name=extra_name,
+        geometry_distance_m=geometry_distance_m,
+        classified_distance_m=classified_distance_m,
+        unclassified_distance_m=unclassified_distance_m,
+        values=values,
+    )
+
+
+def calculate_route_extra_distributions(
+    route: CyclingRoute,
+) -> dict[str, RouteExtraDistribution]:
+    """Calculate distributions for all routing extra-info categories."""
+
+    return {
+        extra_name: calculate_extra_distribution(
+            route,
+            extra_name,
+        )
+        for extra_name in _ROUTING_EXTRA_INFO
+    }
+
+
+@dataclass(frozen=True)
+class RouteQualityMetrics:
+    """Semantic routing metrics derived from ORS extra-info."""
+
+    asphalt_percentage: float
+    unknown_surface_percentage: float
+    paving_stones_percentage: float
+
+    road_or_cycleway_percentage: float
+    footway_percentage: float
+
+    suitability_7_plus_percentage: float
+    suitability_8_plus_percentage: float
+
+    incline_7_plus_percentage: float
+    incline_10_plus_percentage: float
+
+    decline_7_plus_percentage: float
+    decline_10_plus_percentage: float
+
+
+def _percentage_for_extra_values(
+    distribution: RouteExtraDistribution,
+    accepted_values: set[int],
+) -> float:
+    return sum(
+        item.percentage
+        for item in distribution.values
+        if item.value in accepted_values
+    )
+
+
+def calculate_route_quality_metrics(
+    route: CyclingRoute,
+) -> RouteQualityMetrics:
+    """Calculate semantic quality metrics for road-cycling route ranking."""
+
+    distributions = calculate_route_extra_distributions(
+        route
+    )
+
+    surface = distributions["surface"]
+    waytype = distributions["waytype"]
+    suitability = distributions["suitability"]
+    steepness = distributions["steepness"]
+
+    return RouteQualityMetrics(
+        asphalt_percentage=_percentage_for_extra_values(
+            surface,
+            {3},
+        ),
+        unknown_surface_percentage=_percentage_for_extra_values(
+            surface,
+            {0},
+        ),
+        paving_stones_percentage=_percentage_for_extra_values(
+            surface,
+            {14},
+        ),
+        road_or_cycleway_percentage=_percentage_for_extra_values(
+            waytype,
+            {1, 2, 3, 6},
+        ),
+        footway_percentage=_percentage_for_extra_values(
+            waytype,
+            {7},
+        ),
+        suitability_7_plus_percentage=_percentage_for_extra_values(
+            suitability,
+            {7, 8, 9, 10},
+        ),
+        suitability_8_plus_percentage=_percentage_for_extra_values(
+            suitability,
+            {8, 9, 10},
+        ),
+        incline_7_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {3, 4, 5},
+        ),
+        incline_10_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {4, 5},
+        ),
+        decline_7_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {-3, -4, -5},
+        ),
+        decline_10_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {-4, -5},
+        ),
+    )
