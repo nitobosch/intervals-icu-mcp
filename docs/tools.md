@@ -227,6 +227,21 @@ The default uses two shaping points, verified to be more stable than larger valu
 and rejects routes whose absolute distance deviation exceeds 50%. Set
 `max_distance_deviation_percentage=null` to disable that route-level guard.
 
+After the distance filter and before training analysis, generated candidates are
+deduplicated geometrically. The default samples each route every 100 m, considers
+sampled points within 50 m to match, and removes a later candidate when the
+smaller of the two directional overlap percentages is at least 90%. This symmetric
+definition prevents a short route contained in only part of a longer route from
+being treated as a full duplicate. Candidate order and deterministic ORS seeds
+decide which geometry is retained.
+
+The three parameters are configurable with
+`deduplication_resample_spacing_m`, `deduplication_proximity_m`, and
+`deduplication_overlap_threshold_percentage`. Set the threshold to `null` to
+disable deduplication. Response metadata reports `candidates_generated`,
+`candidates_after_distance_filter`, and `candidates_after_deduplication`, along
+with the applied settings.
+
 The generated geometry and route-quality metrics are planning aids. They do not
 include real-time traffic, closures, weather, daylight, or a safety guarantee.
 
