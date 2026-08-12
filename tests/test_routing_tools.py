@@ -7,12 +7,17 @@ import pytest
 from intervals_icu_mcp.auth import ICUConfig
 from intervals_icu_mcp.openrouteservice_client import OpenRouteServiceClient
 from intervals_icu_mcp.tools.routing import (
+    CyclingRoute,
     GeocodeCandidate,
     LocationResolutionError,
+    RouteCoordinate,
+    RouteParsingError,
+    calculate_elevation_gain_loss,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
     normalize_location_text,
+    parse_cycling_route_response,
     parse_lat_lon,
     resolve_coordinate_location,
     resolve_location,
@@ -575,3 +580,160 @@ async def test_resolve_location_direct_coordinates_bypass_geocoder() -> None:
     assert result.latitude == 39.590265
 
     geocode.assert_not_awaited()
+
+
+def test_flat_route_has_zero_smoothed_elevation_change() -> None:
+    coordinates = (
+        RouteCoordinate(2.60, 39.50, 100.0),
+        RouteCoordinate(2.61, 39.50, 100.0),
+        RouteCoordinate(2.62, 39.50, 100.0),
+    )
+
+    gain, loss = calculate_elevation_gain_loss(coordinates)
+
+    assert gain == pytest.approx(0.0)
+    assert loss == pytest.approx(0.0)
+
+
+def test_sustained_climb_remains_positive_after_smoothing() -> None:
+    coordinates = (
+        RouteCoordinate(2.600, 39.500, 100.0),
+        RouteCoordinate(2.605, 39.500, 150.0),
+        RouteCoordinate(2.610, 39.500, 200.0),
+        RouteCoordinate(2.615, 39.500, 250.0),
+        RouteCoordinate(2.620, 39.500, 300.0),
+    )
+
+    gain, loss = calculate_elevation_gain_loss(coordinates)
+
+    assert gain is not None
+    assert loss is not None
+    assert gain > 150.0
+    assert loss == pytest.approx(0.0)
+
+
+def test_elevation_smoothing_suppresses_short_noise() -> None:
+    coordinates = tuple(
+        RouteCoordinate(
+            2.600 + index * 0.0003,
+            39.500,
+            100.0 if index % 2 == 0 else 110.0,
+        )
+        for index in range(20)
+    )
+
+    raw_gain = 90.0
+
+    gain, _ = calculate_elevation_gain_loss(coordinates)
+
+    assert gain is not None
+    assert gain < raw_gain
+
+
+def test_missing_elevation_returns_no_gain_or_loss() -> None:
+    coordinates = (
+        RouteCoordinate(2.60, 39.50, None),
+        RouteCoordinate(2.61, 39.50, None),
+    )
+
+    assert calculate_elevation_gain_loss(
+        coordinates
+    ) == (None, None)
+
+
+def test_parse_cycling_route_response() -> None:
+    result = parse_cycling_route_response(
+        {
+            "features": [
+                {
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [
+                            [2.630000, 39.590000, 100.0],
+                            [2.635000, 39.595000, 150.0],
+                            [2.640000, 39.600000, 200.0],
+                        ],
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": 12345.6,
+                            "duration": 2345.7,
+                            "ascent": 321.0,
+                            "descent": 123.0,
+                        },
+                        "way_points": [0, 2],
+                        "segments": [
+                            {
+                                "distance": 12345.6,
+                                "duration": 2345.7,
+                            }
+                        ],
+                        "extras": {
+                            "surface": {
+                                "values": [
+                                    [0, 2, 3],
+                                ]
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    assert isinstance(result, CyclingRoute)
+    assert result.distance_m == pytest.approx(12345.6)
+    assert result.duration_s == pytest.approx(2345.7)
+
+    assert result.ors_ascent_m == pytest.approx(321.0)
+    assert result.ors_descent_m == pytest.approx(123.0)
+
+    assert result.elevation_gain_m is not None
+    assert result.elevation_gain_m > 0
+    assert result.elevation_loss_m == pytest.approx(0.0)
+
+    assert len(result.geometry) == 3
+    assert result.geometry[0].elevation_m == 100.0
+
+    assert result.waypoint_indices == (0, 2)
+    assert len(result.segments) == 1
+    assert "surface" in result.extras
+
+
+def test_parser_does_not_use_ors_ascent_as_computed_gain() -> None:
+    result = parse_cycling_route_response(
+        {
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.600, 39.500, 100.0],
+                            [2.605, 39.500, 150.0],
+                            [2.610, 39.500, 200.0],
+                            [2.615, 39.500, 250.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": 2000.0,
+                            "duration": 300.0,
+                            "ascent": 9999.0,
+                            "descent": 8888.0,
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
+    assert result.ors_ascent_m == 9999.0
+    assert result.elevation_gain_m is not None
+    assert result.elevation_gain_m < 9999.0
+
+
+def test_parse_cycling_route_rejects_invalid_response() -> None:
+    with pytest.raises(
+        RouteParsingError,
+        match="no features",
+    ):
+        parse_cycling_route_response({})
