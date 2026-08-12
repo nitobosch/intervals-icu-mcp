@@ -19,6 +19,7 @@ from intervals_icu_mcp.tools.routing import (
     RouteTimeline,
     RouteTimelinePoint,
     RouteTrainingWindow,
+    RouteWindowInterruptionMetrics,
     build_cycling_route,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
@@ -28,6 +29,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_route_timeline,
     calculate_training_window,
     calculate_training_window_extra_distributions,
+    calculate_training_window_interruption_metrics,
     calculate_training_window_quality_metrics,
     extract_geocode_candidates,
     geocode_location_candidates,
@@ -1689,3 +1691,131 @@ def test_training_window_quality_metrics() -> None:
     assert metrics.incline_7_plus_percentage == pytest.approx(100.0)
     assert metrics.incline_10_plus_percentage == pytest.approx(100.0)
     assert metrics.decline_7_plus_percentage == pytest.approx(0.0)
+
+
+def test_training_window_interruption_metrics() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 1],
+                "type": 5,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [1, 2],
+                "type": 7,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [2, 3],
+                "type": 3,
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    metrics = calculate_training_window_interruption_metrics(
+        route,
+        window,
+    )
+
+    assert isinstance(
+        metrics,
+        RouteWindowInterruptionMetrics,
+    )
+
+    # The type=5 maneuver starts exactly at the window boundary,
+    # so it is deliberately excluded.
+    assert metrics.maneuver_count == 2
+    assert metrics.sharp_turn_count == 1
+    assert metrics.roundabout_count == 1
+    assert metrics.u_turn_count == 0
+
+
+def test_training_window_interruption_metrics_ignores_non_maneuvers() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 1],
+                "type": 11,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [1, 2],
+                "type": 6,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [2, 3],
+                "type": 10,
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    metrics = calculate_training_window_interruption_metrics(
+        route,
+        window,
+    )
+
+    assert metrics.maneuver_count == 0
+    assert metrics.sharp_turn_count == 0
+    assert metrics.roundabout_count == 0
+    assert metrics.u_turn_count == 0
+
+
+def test_training_window_interruption_metrics_counts_u_turn() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 1],
+                "type": 6,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [1, 2],
+                "type": 9,
+            },
+            {
+                "duration": 10.0,
+                "way_points": [2, 3],
+                "type": 6,
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    metrics = calculate_training_window_interruption_metrics(
+        route,
+        window,
+    )
+
+    assert metrics.maneuver_count == 1
+    assert metrics.u_turn_count == 1

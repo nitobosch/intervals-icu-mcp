@@ -2022,3 +2022,117 @@ def calculate_training_window_quality_metrics(
             {-4, -5},
         ),
     )
+
+
+_MANEUVER_INSTRUCTION_TYPES = frozenset({
+    0,   # left
+    1,   # right
+    2,   # sharp left
+    3,   # sharp right
+    4,   # slight left
+    5,   # slight right
+    7,   # enter roundabout
+    8,   # exit roundabout
+    9,   # U-turn
+    12,  # keep left
+    13,  # keep right
+})
+
+_SHARP_TURN_INSTRUCTION_TYPES = frozenset({2, 3})
+
+
+@dataclass(frozen=True)
+class RouteWindowInterruptionMetrics:
+    """Maneuver interruptions inside a route training window."""
+
+    maneuver_count: int
+    sharp_turn_count: int
+    roundabout_count: int
+    u_turn_count: int
+
+
+def calculate_training_window_interruption_metrics(
+    route: CyclingRoute,
+    window: RouteTrainingWindow,
+) -> RouteWindowInterruptionMetrics:
+    """Count meaningful ORS maneuvers whose start lies inside the window."""
+
+    maneuver_count = 0
+    sharp_turn_count = 0
+    roundabout_count = 0
+    u_turn_count = 0
+
+    for segment in route.segments:
+        raw_steps = segment.get("steps")
+
+        if not isinstance(raw_steps, list):
+            raise RouteParsingError(
+                "OpenRouteService route segment is missing steps."
+            )
+
+        steps = cast(list[Any], raw_steps)
+
+        for raw_step in steps:
+            if not isinstance(raw_step, dict):
+                raise RouteParsingError(
+                    "OpenRouteService returned an invalid route step."
+                )
+
+            step = cast(dict[str, Any], raw_step)
+
+            raw_way_points = step.get("way_points")
+
+            if not isinstance(raw_way_points, list):
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step waypoints."
+                )
+
+            way_points = cast(list[Any], raw_way_points)
+
+            if len(way_points) < 2:
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step waypoints."
+                )
+
+            start_value = _numeric_value(way_points[0])
+            type_value = _numeric_value(step.get("type"))
+
+            if (
+                start_value is None
+                or type_value is None
+                or not start_value.is_integer()
+                or not type_value.is_integer()
+            ):
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step instruction data."
+                )
+
+            start_index = int(start_value)
+            instruction_type = int(type_value)
+
+            if (
+                start_index <= window.start.geometry_index
+                or start_index >= window.end.geometry_index
+            ):
+                continue
+
+            if instruction_type not in _MANEUVER_INSTRUCTION_TYPES:
+                continue
+
+            maneuver_count += 1
+
+            if instruction_type in _SHARP_TURN_INSTRUCTION_TYPES:
+                sharp_turn_count += 1
+
+            if instruction_type == 7:
+                roundabout_count += 1
+
+            if instruction_type == 9:
+                u_turn_count += 1
+
+    return RouteWindowInterruptionMetrics(
+        maneuver_count=maneuver_count,
+        sharp_turn_count=sharp_turn_count,
+        roundabout_count=roundabout_count,
+        u_turn_count=u_turn_count,
+    )
