@@ -3889,6 +3889,43 @@ def _serialize_cycling_route_quality_metrics(
     return asdict(metrics)
 
 
+def serialize_training_block_sequence_analysis(
+    route: CyclingRoute,
+    analysis: TrainingBlockSequenceAnalysis,
+) -> dict[str, Any]:
+    """Serialize one repeated training-block sequence for an MCP response."""
+
+    return {
+        "spec": asdict(analysis.spec),
+        "summary": {
+            "total_work_duration_seconds": analysis.total_work_duration_s,
+            "total_work_duration_minutes": (
+                analysis.total_work_duration_s / 60.0
+            ),
+            "total_distance_meters": analysis.total_distance_m,
+            "total_elevation_gain_meters": analysis.total_elevation_gain_m,
+            "total_elevation_loss_meters": analysis.total_elevation_loss_m,
+            "climbing_balance_meters": analysis.climbing_balance_m,
+            "total_maneuver_count": analysis.total_maneuver_count,
+            "elevation_gain_rate_range_meters_per_hour": (
+                analysis.elevation_gain_rate_range_m_per_hour
+            ),
+        },
+        "work_blocks": [
+            _serialize_training_window_analysis(route, work_block)
+            for work_block in analysis.work_blocks
+        ],
+        "recoveries": [
+            (
+                _serialize_route_session_segment_analysis(route, recovery)
+                if recovery is not None
+                else None
+            )
+            for recovery in analysis.recoveries
+        ],
+    }
+
+
 def _serialize_training_window_analysis(
     route: CyclingRoute,
     analysis: RouteTrainingWindowAnalysis,

@@ -71,6 +71,7 @@ from intervals_icu_mcp.tools.routing import (
     resolve_location,
     resolve_named_location,
     select_geocode_candidate,
+    serialize_training_block_sequence_analysis,
     snap_coordinate,
     split_location_query,
     timeline_point_at_time,
@@ -3893,6 +3894,74 @@ def test_serialize_cycling_route_candidate_analysis(
     assert result["route_quality"] == {"quality": "route"}
     assert serialize_segment.call_count == 2
     serialize_quality.assert_called_once_with(route_quality)
+
+
+def test_serialize_training_block_sequence_analysis() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    spec = TrainingBlockSpec(
+        work_duration_s=20.0,
+        repetitions=2,
+        recovery_min_s=0.0,
+        recovery_max_s=20.0,
+    )
+    sequence = find_training_block_sequences(
+        route,
+        timeline,
+        spec,
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        step_s=20.0,
+    )[0]
+
+    result = serialize_training_block_sequence_analysis(route, sequence)
+
+    assert result["spec"] == {
+        "work_duration_s": 20.0,
+        "repetitions": 2,
+        "recovery_min_s": 0.0,
+        "recovery_max_s": 20.0,
+    }
+    assert result["summary"] == {
+        "total_work_duration_seconds": sequence.total_work_duration_s,
+        "total_work_duration_minutes": sequence.total_work_duration_s / 60.0,
+        "total_distance_meters": sequence.total_distance_m,
+        "total_elevation_gain_meters": sequence.total_elevation_gain_m,
+        "total_elevation_loss_meters": sequence.total_elevation_loss_m,
+        "climbing_balance_meters": sequence.climbing_balance_m,
+        "total_maneuver_count": sequence.total_maneuver_count,
+        "elevation_gain_rate_range_meters_per_hour": (
+            sequence.elevation_gain_rate_range_m_per_hour
+        ),
+    }
+    assert len(result["work_blocks"]) == 2
+    assert len(result["recoveries"]) == 1
+    assert result["work_blocks"][0]["start"]["time_seconds"] == (
+        sequence.work_blocks[0].window.start.time_s
+    )
+    assert result["recoveries"] == [None]
+
+    sequence_with_recovery = next(
+        candidate
+        for candidate in find_training_block_sequences(
+            route,
+            timeline,
+            spec,
+            start_time_min_s=0.0,
+            start_time_max_s=40.0,
+            step_s=20.0,
+        )
+        if candidate.recoveries[0] is not None
+    )
+    recovered_result = serialize_training_block_sequence_analysis(
+        route,
+        sequence_with_recovery,
+    )
+    recovery = sequence_with_recovery.recoveries[0]
+    assert recovery is not None
+    assert recovered_result["recoveries"][0]["duration_seconds"] == (
+        recovery.segment.duration_s
+    )
 
 
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:
