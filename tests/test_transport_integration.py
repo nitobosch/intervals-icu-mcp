@@ -31,10 +31,10 @@ class TestInMemoryTransport:
             assert client.is_connected()
 
     async def test_all_default_mode_tools_registered(self):
-        """Default delete_mode=safe registers 64 tools (including 4 read-only Strava tools)."""
+        """Default delete_mode=safe registers 65 tools (including 4 read-only Strava tools)."""
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            assert len(tools) == 64
+            assert len(tools) == 65
             names = {t.name for t in tools}
             # Spot-check tools from different modules / tiers
             assert "icu_get_recent_activities" in names
@@ -45,6 +45,7 @@ class TestInMemoryTransport:
             assert "icu_get_activity_messages" in names  # Activity messages
             assert "icu_get_custom_items" in names  # Custom items
             assert "icu_update_sport_settings" in names
+            assert "icu_find_best_cycling_training_window" in names
 
     async def test_sport_settings_tools_expose_indoor_ftp(self):
         """Create and update schemas accept the separate indoor power threshold."""
@@ -208,5 +209,5 @@ class TestHTTPTransport:
                 tools_body = (await tools_resp.aread()).decode()
                 tools_payload = self._parse_sse_response(tools_body)
                 tool_names = {t["name"] for t in tools_payload["result"]["tools"]}
-                assert len(tool_names) == 64  # safe mode default + 4 Strava tools
+                assert len(tool_names) == 65  # safe mode default + 4 Strava tools
                 assert "icu_get_recent_activities" in tool_names

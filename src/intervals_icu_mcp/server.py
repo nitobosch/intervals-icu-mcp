@@ -85,6 +85,7 @@ from .tools.gear import (
 )
 from .tools.performance import get_power_curves
 from .tools.periodization import get_annual_training_plan
+from .tools.routing import find_best_cycling_training_window
 from .tools.sport_settings import (
     apply_sport_settings,
     create_sport_settings,
@@ -105,6 +106,18 @@ from .tools.wellness import (
     update_wellness,
 )
 from .tools.workout_library import get_workout_library, get_workouts_in_folder
+
+# Register routing tools
+mcp.tool(
+    name="icu_find_best_cycling_training_window",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(find_best_cycling_training_window)
+
 
 # Register direct Strava tools
 

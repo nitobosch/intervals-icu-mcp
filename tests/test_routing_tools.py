@@ -2451,3 +2451,202 @@ def test_find_best_training_window_across_durations_returns_none(
     )
 
     assert best is None
+
+
+async def test_find_best_cycling_training_window_requires_ors_config() -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    ctx = SimpleNamespace(
+        get_state=AsyncMock(
+            return_value=ICUConfig(
+                openrouteservice_api_key="",
+            )
+        )
+    )
+
+    result = await routing.find_best_cycling_training_window(
+        locations=["A", "B"],
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+
+    assert response["error"]["type"] == "configuration_error"
+
+
+async def test_find_best_cycling_training_window_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    config = _config()
+
+    ctx = SimpleNamespace(
+        get_state=AsyncMock(return_value=config)
+    )
+
+    resolved_a = ResolvedLocation(
+        input_value="A",
+        source="geocode",
+        label="A",
+        original_longitude=2.6,
+        original_latitude=39.5,
+        longitude=2.6,
+        latitude=39.5,
+        snapped_distance_m=1.0,
+    )
+    resolved_b = ResolvedLocation(
+        input_value="B",
+        source="geocode",
+        label="B",
+        original_longitude=2.7,
+        original_latitude=39.6,
+        longitude=2.7,
+        latitude=39.6,
+        snapped_distance_m=1.0,
+    )
+
+    route = CyclingRoute(
+        distance_m=10000.0,
+        duration_s=3600.0,
+        elevation_gain_m=500.0,
+        elevation_loss_m=20.0,
+        ors_ascent_m=500.0,
+        ors_descent_m=20.0,
+        geometry=(
+            RouteCoordinate(2.6, 39.5, 100.0),
+            RouteCoordinate(2.7, 39.6, 500.0),
+        ),
+        waypoint_indices=(0, 1),
+        segments=(),
+        extras={},
+    )
+
+    window = RouteTrainingWindow(
+        start=RouteTimelinePoint(
+            geometry_index=0,
+            distance_m=0.0,
+            time_s=1500.0,
+            elevation_m=100.0,
+        ),
+        end=RouteTimelinePoint(
+            geometry_index=1,
+            distance_m=10000.0,
+            time_s=3300.0,
+            elevation_m=500.0,
+        ),
+        distance_m=10000.0,
+        duration_s=1800.0,
+        elevation_gain_m=500.0,
+        elevation_loss_m=20.0,
+        net_elevation_gain_m=400.0,
+    )
+
+    quality = RouteQualityMetrics(
+        asphalt_percentage=99.0,
+        unknown_surface_percentage=1.0,
+        paving_stones_percentage=0.0,
+        road_or_cycleway_percentage=100.0,
+        footway_percentage=0.0,
+        suitability_7_plus_percentage=100.0,
+        suitability_8_plus_percentage=80.0,
+        incline_7_plus_percentage=10.0,
+        incline_10_plus_percentage=5.0,
+        decline_7_plus_percentage=0.0,
+        decline_10_plus_percentage=0.0,
+    )
+
+    interruptions = RouteWindowInterruptionMetrics(
+        maneuver_count=2,
+        sharp_turn_count=0,
+        roundabout_count=0,
+        u_turn_count=0,
+    )
+
+    analysis = routing.RouteTrainingWindowAnalysis(
+        window=window,
+        quality=quality,
+        interruptions=interruptions,
+    )
+
+    class FakeClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> None:
+            return None
+
+    resolve = AsyncMock(
+        side_effect=[resolved_a, resolved_b]
+    )
+    build = AsyncMock(return_value=route)
+
+    monkeypatch.setattr(
+        routing,
+        "OpenRouteServiceClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        routing,
+        "resolve_location",
+        resolve,
+    )
+    monkeypatch.setattr(
+        routing,
+        "build_cycling_route",
+        build,
+    )
+    monkeypatch.setattr(
+        routing,
+        "calculate_route_timeline",
+        lambda _route: object(),
+    )
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        lambda *_args, **_kwargs: (analysis,),
+    )
+    monkeypatch.setattr(
+        routing,
+        "rank_training_windows_across_durations",
+        lambda analyses: analyses,
+    )
+
+    result = await routing.find_best_cycling_training_window(
+        locations=["A", "B"],
+        durations_minutes=[30.0],
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    data = response["data"]
+
+    assert data["route"]["distance_meters"] == 10000.0
+
+    best = data["best_training_window"]
+
+    assert best["duration_minutes"] == pytest.approx(30.0)
+    assert best["elevation_gain_meters"] == 500.0
+    assert best["elevation_loss_meters"] == 20.0
+    assert best["start"]["latitude"] == 39.5
+    assert best["end"]["latitude"] == 39.6
+
+    assert len(data["best_by_duration"]) == 1
+    assert response["metadata"]["profile"] == "cycling-road"
+
+    assert resolve.await_count == 2
+    build.assert_awaited_once()

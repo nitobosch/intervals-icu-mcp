@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import math
 import unicodedata
-from dataclasses import dataclass
-from typing import Any, Literal, cast
+from dataclasses import asdict, dataclass
+from typing import Annotated, Any, Literal, cast
 
-from ..openrouteservice_client import OpenRouteServiceClient
+from fastmcp import Context
+
+from ..auth import ICUConfig
+from ..openrouteservice_client import (
+    OpenRouteServiceAPIError,
+    OpenRouteServiceClient,
+)
+from ..response_builder import ResponseBuilder
 
 
 class LocationResolutionError(Exception):
@@ -2444,3 +2451,253 @@ def find_best_training_window_across_durations(
     )
 
     return ranked[0]
+
+
+def _serialize_training_window_analysis(
+    route: CyclingRoute,
+    analysis: RouteTrainingWindowAnalysis,
+) -> dict[str, Any]:
+    """Serialize one analyzed training window for the public MCP response."""
+
+    window = analysis.window
+    comparison = calculate_training_window_comparison_metrics(
+        analysis,
+    )
+
+    start_coordinate = route.geometry[
+        window.start.geometry_index
+    ]
+    end_coordinate = route.geometry[
+        window.end.geometry_index
+    ]
+
+    return {
+        "duration_seconds": window.duration_s,
+        "duration_minutes": window.duration_s / 60.0,
+        "start": {
+            "time_seconds": window.start.time_s,
+            "time_minutes": window.start.time_s / 60.0,
+            "distance_meters": window.start.distance_m,
+            "geometry_index": window.start.geometry_index,
+            "elevation_meters": window.start.elevation_m,
+            "longitude": start_coordinate.longitude,
+            "latitude": start_coordinate.latitude,
+        },
+        "end": {
+            "time_seconds": window.end.time_s,
+            "time_minutes": window.end.time_s / 60.0,
+            "distance_meters": window.end.distance_m,
+            "geometry_index": window.end.geometry_index,
+            "elevation_meters": window.end.elevation_m,
+            "longitude": end_coordinate.longitude,
+            "latitude": end_coordinate.latitude,
+        },
+        "distance_meters": window.distance_m,
+        "elevation_gain_meters": window.elevation_gain_m,
+        "elevation_loss_meters": window.elevation_loss_m,
+        "net_elevation_gain_meters": window.net_elevation_gain_m,
+        "comparison": asdict(comparison),
+        "quality": asdict(analysis.quality),
+        "interruptions": asdict(analysis.interruptions),
+    }
+
+
+async def find_best_cycling_training_window(
+    locations: Annotated[
+        list[str],
+        (
+            "Ordered route locations. Each item may be a place name "
+            "or 'latitude,longitude' coordinates."
+        ),
+    ],
+    start_time_min_minutes: Annotated[
+        float,
+        "Earliest allowed training-window start, minutes from route start.",
+    ] = 20.0,
+    start_time_max_minutes: Annotated[
+        float,
+        "Latest allowed training-window start, minutes from route start.",
+    ] = 30.0,
+    durations_minutes: Annotated[
+        list[float] | None,
+        (
+            "Candidate continuous training-window durations in minutes. "
+            "Defaults to 20, 30 and 40."
+        ),
+    ] = None,
+    step_minutes: Annotated[
+        float,
+        "Candidate start-time search step in minutes.",
+    ] = 1.0,
+    country: Annotated[
+        str | None,
+        "Optional ISO country code used to constrain named-place geocoding.",
+    ] = None,
+    focus_longitude: Annotated[
+        float | None,
+        "Optional longitude used to bias named-place geocoding.",
+    ] = None,
+    focus_latitude: Annotated[
+        float | None,
+        "Optional latitude used to bias named-place geocoding.",
+    ] = None,
+    snap_radius_m: Annotated[
+        float,
+        "Maximum network snap radius in meters for each route location.",
+    ] = 350.0,
+    ctx: Context | None = None,
+) -> str:
+    """Find the best continuous climbing-oriented cycling training window.
+
+    Builds a road-cycling route through the ordered locations, evaluates the
+    best window independently for each requested duration, then compares those
+    duration winners using normalized climbing metrics.
+    """
+
+    assert ctx is not None
+    config: ICUConfig = await ctx.get_state("config")
+
+    if not config.openrouteservice_api_key.strip():
+        return ResponseBuilder.build_error_response(
+            "OpenRouteService API is not configured.",
+            error_type="configuration_error",
+        )
+
+    if len(locations) < 2:
+        return ResponseBuilder.build_error_response(
+            "At least two route locations are required.",
+            error_type="validation_error",
+        )
+
+    candidate_durations = (
+        durations_minutes
+        if durations_minutes is not None
+        else [20.0, 30.0, 40.0]
+    )
+
+    if not candidate_durations:
+        return ResponseBuilder.build_error_response(
+            "At least one training-window duration is required.",
+            error_type="validation_error",
+        )
+
+    if any(duration <= 0 for duration in candidate_durations):
+        return ResponseBuilder.build_error_response(
+            "Training-window durations must be greater than zero.",
+            error_type="validation_error",
+        )
+
+    if step_minutes <= 0:
+        return ResponseBuilder.build_error_response(
+            "step_minutes must be greater than zero.",
+            error_type="validation_error",
+        )
+
+    if snap_radius_m <= 0:
+        return ResponseBuilder.build_error_response(
+            "snap_radius_m must be greater than zero.",
+            error_type="validation_error",
+        )
+
+    try:
+        async with OpenRouteServiceClient(config) as client:
+            resolved_locations = [
+                await resolve_location(
+                    client,
+                    value,
+                    country=country,
+                    focus_lon=focus_longitude,
+                    focus_lat=focus_latitude,
+                    snap_radius_m=snap_radius_m,
+                )
+                for value in locations
+            ]
+
+            route = await build_cycling_route(
+                client,
+                resolved_locations,
+            )
+
+        timeline = calculate_route_timeline(route)
+
+        analyses = find_best_training_windows_by_duration(
+            route,
+            timeline,
+            start_time_min_s=start_time_min_minutes * 60.0,
+            start_time_max_s=start_time_max_minutes * 60.0,
+            durations_s=tuple(
+                duration * 60.0
+                for duration in candidate_durations
+            ),
+            step_s=step_minutes * 60.0,
+        )
+
+        if not analyses:
+            return ResponseBuilder.build_error_response(
+                "No valid training window fits within the generated route.",
+                error_type="not_found",
+            )
+
+        ranked = rank_training_windows_across_durations(
+            analyses,
+        )
+        best = ranked[0]
+
+        return ResponseBuilder.build_response(
+            data={
+                "route": {
+                    "distance_meters": route.distance_m,
+                    "duration_seconds": route.duration_s,
+                    "elevation_gain_meters": route.elevation_gain_m,
+                    "elevation_loss_meters": route.elevation_loss_m,
+                    "resolved_locations": [
+                        asdict(location)
+                        for location in resolved_locations
+                    ],
+                },
+                "best_training_window": (
+                    _serialize_training_window_analysis(
+                        route,
+                        best,
+                    )
+                ),
+                "best_by_duration": [
+                    _serialize_training_window_analysis(
+                        route,
+                        analysis,
+                    )
+                    for analysis in analyses
+                ],
+            },
+            metadata={
+                "profile": "cycling-road",
+                "candidate_duration_minutes": candidate_durations,
+                "start_time_range_minutes": [
+                    start_time_min_minutes,
+                    start_time_max_minutes,
+                ],
+                "step_minutes": step_minutes,
+            },
+            query_type="cycling_training_window",
+        )
+
+    except LocationResolutionError as exc:
+        return ResponseBuilder.build_error_response(
+            str(exc),
+            error_type="location_resolution_error",
+        )
+    except (ValueError, RouteParsingError) as exc:
+        return ResponseBuilder.build_error_response(
+            str(exc),
+            error_type="validation_error",
+        )
+    except OpenRouteServiceAPIError as exc:
+        return ResponseBuilder.build_error_response(
+            str(exc),
+            error_type="api_error",
+        )
+    except Exception as exc:
+        return ResponseBuilder.build_error_response(
+            f"Unexpected error: {exc}",
+            error_type="internal_error",
+        )
