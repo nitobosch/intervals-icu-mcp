@@ -10,6 +10,7 @@ from intervals_icu_mcp.tools.routing import (
     CyclingRoute,
     CyclingRouteCandidate,
     CyclingRouteCandidateAnalysis,
+    CyclingRouteCandidateSearchResult,
     CyclingRouteQualityMetrics,
     CyclingSessionRequirements,
     GeocodeCandidate,
@@ -3242,15 +3243,22 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
     import intervals_icu_mcp.tools.routing as routing
 
     origin = _resolved_location("Start", 2.63, 39.59)
-    generated = object()
+    generated = (object(), object(), object())
+    deduplicated = generated[:2]
     evaluated = object()
     ranked = object()
     generate = AsyncMock(return_value=generated)
     evaluate = Mock(return_value=evaluated)
     rank = Mock(return_value=ranked)
+    deduplicate = Mock(return_value=deduplicated)
     monkeypatch.setattr(routing, "generate_cycling_route_candidates", generate)
     monkeypatch.setattr(routing, "evaluate_cycling_route_candidates", evaluate)
     monkeypatch.setattr(routing, "rank_cycling_route_candidates", rank)
+    monkeypatch.setattr(
+        routing,
+        "deduplicate_cycling_route_candidates",
+        deduplicate,
+    )
 
     async with OpenRouteServiceClient(_config()) as client:
         result = await find_cycling_training_route_candidates(
@@ -3264,7 +3272,10 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
             requirements=None,
         )
 
-    assert result is ranked
+    assert result.ranked is ranked
+    assert result.candidates_generated == 3
+    assert result.candidates_after_distance_filter == 3
+    assert result.candidates_after_deduplication == 2
     generate.assert_awaited_once_with(
         client,
         origin,
@@ -3275,7 +3286,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         max_distance_deviation_percentage=50.0,
     )
     evaluate.assert_called_once_with(
-        generated,
+        deduplicated,
         start_time_min_s=1200.0,
         start_time_max_s=1800.0,
         durations_s=(1200.0, 1800.0),
@@ -3284,6 +3295,12 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         session_requirements=None,
     )
     rank.assert_called_once_with(evaluated)
+    deduplicate.assert_called_once_with(
+        generated,
+        overlap_threshold_percentage=90.0,
+        resample_spacing_m=100.0,
+        proximity_m=50.0,
+    )
 
 
 def test_serialize_cycling_route_candidate_analysis(
@@ -4051,6 +4068,33 @@ async def test_find_cycling_training_route_validates_session_requirements_before
     assert "rate requirements" in response["error"]["message"]
 
 
+async def test_find_cycling_training_route_validates_deduplication_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        deduplication_overlap_threshold_percentage=101.0,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "between 0 and 100" in response["error"]["message"]
+
+
 async def test_find_cycling_training_route_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4062,7 +4106,14 @@ async def test_find_cycling_training_route_success(
     origin = _resolved_location("Start", 2.63, 39.59)
     first = object()
     second = object()
-    search = AsyncMock(return_value=(first, second))
+    search = AsyncMock(
+        return_value=CyclingRouteCandidateSearchResult(
+            ranked=(first, second),
+            candidates_generated=2,
+            candidates_after_distance_filter=2,
+            candidates_after_deduplication=2,
+        )
+    )
 
     class FakeClient:
         def __init__(self, _config: ICUConfig) -> None:
@@ -4107,6 +4158,14 @@ async def test_find_cycling_training_route_success(
     assert response["data"]["best_route"] == {"candidate": "first"}
     assert response["data"]["alternatives"] == [{"candidate": "second"}]
     assert response["metadata"]["candidate_count_eligible"] == 2
+    assert response["metadata"]["candidates_generated"] == 2
+    assert response["metadata"]["candidates_after_distance_filter"] == 2
+    assert response["metadata"]["candidates_after_deduplication"] == 2
+    assert response["metadata"]["deduplication"] == {
+        "overlap_threshold_percentage": 90.0,
+        "resample_spacing_m": 100.0,
+        "proximity_m": 50.0,
+    }
     assert response["metadata"]["session_eligibility_requirements"] == {
         "max_warmup_elevation_gain_rate_m_per_hour": None,
         "max_warmup_gradient_percentage": None,
@@ -4123,6 +4182,12 @@ async def test_find_cycling_training_route_success(
     search.assert_awaited_once()
     assert search.await_args.kwargs["target_distance_m"] == 50_000.0
     assert search.await_args.kwargs["durations_s"] == (1800.0,)
+    assert (
+        search.await_args.kwargs[
+            "deduplication_overlap_threshold_percentage"
+        ]
+        == 90.0
+    )
     assert (
         search.await_args.kwargs[
             "session_requirements"

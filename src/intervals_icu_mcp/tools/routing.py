@@ -3276,6 +3276,16 @@ def rank_cycling_route_candidates(
     )
 
 
+@dataclass(frozen=True)
+class CyclingRouteCandidateSearchResult:
+    """Ranked candidates and auditable generation-pipeline counts."""
+
+    ranked: tuple[CyclingRouteCandidateAnalysis, ...]
+    candidates_generated: int
+    candidates_after_distance_filter: int
+    candidates_after_deduplication: int
+
+
 async def find_cycling_training_route_candidates(
     client: OpenRouteServiceClient,
     origin: ResolvedLocation,
@@ -3289,9 +3299,12 @@ async def find_cycling_training_route_candidates(
     round_trip_points: int = 2,
     seed_start: int = 0,
     max_distance_deviation_percentage: float | None = 50.0,
+    deduplication_overlap_threshold_percentage: float | None = 90.0,
+    deduplication_resample_spacing_m: float = 100.0,
+    deduplication_proximity_m: float = 50.0,
     requirements: RouteTrainingWindowRequirements | None = None,
     session_requirements: CyclingSessionRequirements | None = None,
-) -> tuple[CyclingRouteCandidateAnalysis, ...]:
+) -> CyclingRouteCandidateSearchResult:
     """Generate, evaluate and rank cycling training route candidates."""
 
     candidates = await generate_cycling_route_candidates(
@@ -3305,6 +3318,17 @@ async def find_cycling_training_route_candidates(
             max_distance_deviation_percentage
         ),
     )
+    candidates_after_distance_filter = len(candidates)
+    if deduplication_overlap_threshold_percentage is not None:
+        candidates = deduplicate_cycling_route_candidates(
+            candidates,
+            overlap_threshold_percentage=(
+                deduplication_overlap_threshold_percentage
+            ),
+            resample_spacing_m=deduplication_resample_spacing_m,
+            proximity_m=deduplication_proximity_m,
+        )
+    candidates_after_deduplication = len(candidates)
     analyses = evaluate_cycling_route_candidates(
         candidates,
         start_time_min_s=start_time_min_s,
@@ -3315,7 +3339,12 @@ async def find_cycling_training_route_candidates(
         session_requirements=session_requirements,
     )
 
-    return rank_cycling_route_candidates(analyses)
+    return CyclingRouteCandidateSearchResult(
+        ranked=rank_cycling_route_candidates(analyses),
+        candidates_generated=candidate_count,
+        candidates_after_distance_filter=candidates_after_distance_filter,
+        candidates_after_deduplication=candidates_after_deduplication,
+    )
 
 
 def serialize_cycling_route_candidate_analysis(
@@ -3771,6 +3800,18 @@ async def find_cycling_training_route(
         float | None,
         "Maximum absolute route-distance deviation; defaults to 50 percent.",
     ] = 50.0,
+    deduplication_overlap_threshold_percentage: Annotated[
+        float | None,
+        "Near-duplicate overlap threshold; null disables deduplication.",
+    ] = 90.0,
+    deduplication_resample_spacing_m: Annotated[
+        float,
+        "Geometry sampling interval used for route deduplication.",
+    ] = 100.0,
+    deduplication_proximity_m: Annotated[
+        float,
+        "Maximum point distance counted as overlapping geometry.",
+    ] = 50.0,
     country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
     focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
     focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,
@@ -3875,6 +3916,21 @@ async def find_cycling_training_route(
             "max_distance_deviation_percentage must not be negative."
         )
 
+    if validation_error is None:
+        try:
+            deduplicate_cycling_route_candidates(
+                (),
+                overlap_threshold_percentage=(
+                    deduplication_overlap_threshold_percentage
+                    if deduplication_overlap_threshold_percentage is not None
+                    else 90.0
+                ),
+                resample_spacing_m=deduplication_resample_spacing_m,
+                proximity_m=deduplication_proximity_m,
+            )
+        except ValueError as exc:
+            validation_error = str(exc)
+
     if validation_error:
         return ResponseBuilder.build_error_response(
             validation_error,
@@ -3963,7 +4019,7 @@ async def find_cycling_training_route(
                 focus_lat=focus_latitude,
                 snap_radius_m=snap_radius_m,
             )
-            ranked = await find_cycling_training_route_candidates(
+            search_result = await find_cycling_training_route_candidates(
                 client,
                 origin,
                 target_distance_m=target_distance_km * 1000.0,
@@ -3976,10 +4032,18 @@ async def find_cycling_training_route(
                 max_distance_deviation_percentage=(
                     max_distance_deviation_percentage
                 ),
+                deduplication_overlap_threshold_percentage=(
+                    deduplication_overlap_threshold_percentage
+                ),
+                deduplication_resample_spacing_m=(
+                    deduplication_resample_spacing_m
+                ),
+                deduplication_proximity_m=deduplication_proximity_m,
                 requirements=requirements,
                 session_requirements=session_requirements,
             )
 
+        ranked = search_result.ranked
         if not ranked:
             return ResponseBuilder.build_error_response(
                 "No generated route contains an eligible training window.",
@@ -4000,6 +4064,20 @@ async def find_cycling_training_route(
                 "profile": "cycling-road",
                 "candidate_count_requested": candidate_count,
                 "candidate_count_eligible": len(serialized),
+                "candidates_generated": search_result.candidates_generated,
+                "candidates_after_distance_filter": (
+                    search_result.candidates_after_distance_filter
+                ),
+                "candidates_after_deduplication": (
+                    search_result.candidates_after_deduplication
+                ),
+                "deduplication": {
+                    "overlap_threshold_percentage": (
+                        deduplication_overlap_threshold_percentage
+                    ),
+                    "resample_spacing_m": deduplication_resample_spacing_m,
+                    "proximity_m": deduplication_proximity_m,
+                },
                 "target_distance_kilometers": target_distance_km,
                 "max_distance_deviation_percentage": (
                     max_distance_deviation_percentage
