@@ -2054,3 +2054,67 @@ def test_rank_training_window_analyses_requires_elevation() -> None:
         match="requires elevation gain and loss",
     ):
         routing.rank_training_window_analyses((analysis,))
+
+
+def test_find_best_training_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = object()
+    timeline = object()
+
+    window_1 = object()
+    window_2 = object()
+
+    analysis_1 = object()
+    analysis_2 = object()
+
+    monkeypatch.setattr(
+        routing,
+        "generate_training_window_candidates",
+        lambda *_args, **_kwargs: (window_1, window_2),
+    )
+    monkeypatch.setattr(
+        routing,
+        "analyze_training_window_candidates",
+        lambda *_args, **_kwargs: (analysis_1, analysis_2),
+    )
+    monkeypatch.setattr(
+        routing,
+        "rank_training_window_analyses",
+        lambda analyses: (analyses[1], analyses[0]),
+    )
+
+    best = routing.find_best_training_window(
+        route,
+        timeline,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        duration_s=1800.0,
+        step_s=60.0,
+    )
+
+    assert best is analysis_2
+
+
+def test_find_best_training_window_returns_none_without_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    monkeypatch.setattr(
+        routing,
+        "generate_training_window_candidates",
+        lambda *_args, **_kwargs: (),
+    )
+
+    best = routing.find_best_training_window(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        duration_s=1800.0,
+    )
+
+    assert best is None

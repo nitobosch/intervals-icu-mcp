@@ -2262,3 +2262,36 @@ def rank_training_window_analyses(
             reverse=True,
         )
     )
+
+
+def find_best_training_window(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    duration_s: float,
+    step_s: float = 60.0,
+) -> RouteTrainingWindowAnalysis | None:
+    """Find the best climb-oriented training window in a start-time range."""
+
+    windows = generate_training_window_candidates(
+        route,
+        timeline,
+        start_time_min_s=start_time_min_s,
+        start_time_max_s=start_time_max_s,
+        duration_s=duration_s,
+        step_s=step_s,
+    )
+
+    if not windows:
+        return None
+
+    analyses = analyze_training_window_candidates(
+        route,
+        windows,
+    )
+
+    ranked = rank_training_window_analyses(analyses)
+
+    return ranked[0]
