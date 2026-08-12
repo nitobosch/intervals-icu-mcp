@@ -2385,3 +2385,69 @@ def test_rank_training_windows_across_durations_uses_gradient_tiebreaker(
     )
 
     assert ranked == (higher_gradient, lower_gradient)
+
+
+def test_find_best_training_window_across_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = object()
+    timeline = object()
+
+    analysis_20 = object()
+    analysis_30 = object()
+    analysis_40 = object()
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        lambda *_args, **_kwargs: (
+            analysis_20,
+            analysis_30,
+            analysis_40,
+        ),
+    )
+
+    monkeypatch.setattr(
+        routing,
+        "rank_training_windows_across_durations",
+        lambda analyses: (
+            analyses[1],
+            analyses[0],
+            analyses[2],
+        ),
+    )
+
+    best = routing.find_best_training_window_across_durations(
+        route,
+        timeline,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 1800.0, 2400.0),
+        step_s=60.0,
+    )
+
+    assert best is analysis_30
+
+
+def test_find_best_training_window_across_durations_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        lambda *_args, **_kwargs: (),
+    )
+
+    best = routing.find_best_training_window_across_durations(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 1800.0, 2400.0),
+    )
+
+    assert best is None

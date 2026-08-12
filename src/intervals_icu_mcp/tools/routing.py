@@ -2414,3 +2414,33 @@ def rank_training_windows_across_durations(
             reverse=True,
         )
     )
+
+
+def find_best_training_window_across_durations(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    *,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    durations_s: tuple[float, ...],
+    step_s: float = 60.0,
+) -> RouteTrainingWindowAnalysis | None:
+    """Find the best training window across multiple candidate durations."""
+
+    analyses = find_best_training_windows_by_duration(
+        route,
+        timeline,
+        start_time_min_s=start_time_min_s,
+        start_time_max_s=start_time_max_s,
+        durations_s=durations_s,
+        step_s=step_s,
+    )
+
+    if not analyses:
+        return None
+
+    ranked = rank_training_windows_across_durations(
+        analyses,
+    )
+
+    return ranked[0]
