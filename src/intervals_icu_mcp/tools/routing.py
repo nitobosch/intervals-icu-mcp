@@ -2279,8 +2279,9 @@ def find_best_training_window(
     start_time_max_s: float,
     duration_s: float,
     step_s: float = 60.0,
+    requirements: RouteTrainingWindowRequirements | None = None,
 ) -> RouteTrainingWindowAnalysis | None:
-    """Find the best climb-oriented training window in a start-time range."""
+    """Find the best eligible climb-oriented window in a start-time range."""
 
     windows = generate_training_window_candidates(
         route,
@@ -2299,6 +2300,15 @@ def find_best_training_window(
         windows,
     )
 
+    if requirements is not None:
+        analyses = filter_training_window_analyses(
+            analyses,
+            requirements,
+        )
+
+    if not analyses:
+        return None
+
     ranked = rank_training_window_analyses(analyses)
 
     return ranked[0]
@@ -2312,6 +2322,7 @@ def find_best_training_windows_by_duration(
     start_time_max_s: float,
     durations_s: tuple[float, ...],
     step_s: float = 60.0,
+    requirements: RouteTrainingWindowRequirements | None = None,
 ) -> tuple[RouteTrainingWindowAnalysis, ...]:
     """Find the best training window independently for each duration."""
 
@@ -2321,19 +2332,152 @@ def find_best_training_windows_by_duration(
     results: list[RouteTrainingWindowAnalysis] = []
 
     for duration_s in durations_s:
-        best = find_best_training_window(
-            route,
-            timeline,
-            start_time_min_s=start_time_min_s,
-            start_time_max_s=start_time_max_s,
-            duration_s=duration_s,
-            step_s=step_s,
-        )
+        if requirements is None:
+            best = find_best_training_window(
+                route,
+                timeline,
+                start_time_min_s=start_time_min_s,
+                start_time_max_s=start_time_max_s,
+                duration_s=duration_s,
+                step_s=step_s,
+            )
+        else:
+            best = find_best_training_window(
+                route,
+                timeline,
+                start_time_min_s=start_time_min_s,
+                start_time_max_s=start_time_max_s,
+                duration_s=duration_s,
+                step_s=step_s,
+                requirements=requirements,
+            )
 
         if best is not None:
             results.append(best)
 
     return tuple(results)
+
+
+@dataclass(frozen=True)
+class RouteTrainingWindowRequirements:
+    """Optional hard eligibility requirements for a training window."""
+
+    min_asphalt_percentage: float | None = None
+    min_road_or_cycleway_percentage: float | None = None
+    min_suitability_7_plus_percentage: float | None = None
+    max_footway_percentage: float | None = None
+    max_elevation_loss_rate_m_per_hour: float | None = None
+    max_maneuvers_per_hour: float | None = None
+
+
+def _validate_training_window_requirements(
+    requirements: RouteTrainingWindowRequirements,
+) -> None:
+    percentage_values = (
+        requirements.min_asphalt_percentage,
+        requirements.min_road_or_cycleway_percentage,
+        requirements.min_suitability_7_plus_percentage,
+        requirements.max_footway_percentage,
+    )
+
+    for value in percentage_values:
+        if value is not None and not 0.0 <= value <= 100.0:
+            raise ValueError(
+                "Training-window percentage requirements must be between "
+                "0 and 100."
+            )
+
+    rate_values = (
+        requirements.max_elevation_loss_rate_m_per_hour,
+        requirements.max_maneuvers_per_hour,
+    )
+
+    for value in rate_values:
+        if value is not None and value < 0.0:
+            raise ValueError(
+                "Training-window rate requirements must not be negative."
+            )
+
+
+def training_window_meets_requirements(
+    analysis: RouteTrainingWindowAnalysis,
+    requirements: RouteTrainingWindowRequirements,
+) -> bool:
+    """Return whether one analyzed window satisfies all enabled requirements."""
+
+    _validate_training_window_requirements(requirements)
+
+    quality = analysis.quality
+
+    if (
+        requirements.min_asphalt_percentage is not None
+        and quality.asphalt_percentage
+        < requirements.min_asphalt_percentage
+    ):
+        return False
+
+    if (
+        requirements.min_road_or_cycleway_percentage is not None
+        and quality.road_or_cycleway_percentage
+        < requirements.min_road_or_cycleway_percentage
+    ):
+        return False
+
+    if (
+        requirements.min_suitability_7_plus_percentage is not None
+        and quality.suitability_7_plus_percentage
+        < requirements.min_suitability_7_plus_percentage
+    ):
+        return False
+
+    if (
+        requirements.max_footway_percentage is not None
+        and quality.footway_percentage
+        > requirements.max_footway_percentage
+    ):
+        return False
+
+    needs_comparison = (
+        requirements.max_elevation_loss_rate_m_per_hour is not None
+        or requirements.max_maneuvers_per_hour is not None
+    )
+
+    if needs_comparison:
+        comparison = calculate_training_window_comparison_metrics(
+            analysis
+        )
+
+        if (
+            requirements.max_elevation_loss_rate_m_per_hour is not None
+            and comparison.elevation_loss_rate_m_per_hour
+            > requirements.max_elevation_loss_rate_m_per_hour
+        ):
+            return False
+
+        if (
+            requirements.max_maneuvers_per_hour is not None
+            and comparison.maneuvers_per_hour
+            > requirements.max_maneuvers_per_hour
+        ):
+            return False
+
+    return True
+
+
+def filter_training_window_analyses(
+    analyses: tuple[RouteTrainingWindowAnalysis, ...],
+    requirements: RouteTrainingWindowRequirements,
+) -> tuple[RouteTrainingWindowAnalysis, ...]:
+    """Keep only training windows satisfying all enabled requirements."""
+
+    return tuple(
+        analysis
+        for analysis in analyses
+        if training_window_meets_requirements(
+            analysis,
+            requirements,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -2431,6 +2575,7 @@ def find_best_training_window_across_durations(
     start_time_max_s: float,
     durations_s: tuple[float, ...],
     step_s: float = 60.0,
+    requirements: RouteTrainingWindowRequirements | None = None,
 ) -> RouteTrainingWindowAnalysis | None:
     """Find the best training window across multiple candidate durations."""
 
@@ -2441,6 +2586,7 @@ def find_best_training_window_across_durations(
         start_time_max_s=start_time_max_s,
         durations_s=durations_s,
         step_s=step_s,
+        requirements=requirements,
     )
 
     if not analyses:

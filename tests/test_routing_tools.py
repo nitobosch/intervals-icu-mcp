@@ -2650,3 +2650,284 @@ async def test_find_best_cycling_training_window_success(
 
     assert resolve.await_count == 2
     build.assert_awaited_once()
+
+
+def test_training_window_requirements_allow_all_by_default() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=10.0,
+            road_or_cycleway_percentage=20.0,
+            suitability_7_plus_percentage=30.0,
+            footway_percentage=70.0,
+        ),
+        interruptions=SimpleNamespace(
+            maneuver_count=100,
+        ),
+        window=SimpleNamespace(
+            elevation_gain_m=100.0,
+            elevation_loss_m=100.0,
+            duration_s=1800.0,
+            distance_m=1000.0,
+        ),
+    )
+
+    requirements = routing.RouteTrainingWindowRequirements()
+
+    assert routing.training_window_meets_requirements(
+        analysis,
+        requirements,
+    )
+
+
+def test_training_window_requirements_reject_low_route_quality() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=80.0,
+            road_or_cycleway_percentage=95.0,
+            suitability_7_plus_percentage=90.0,
+            footway_percentage=5.0,
+        ),
+    )
+
+    requirements = routing.RouteTrainingWindowRequirements(
+        min_asphalt_percentage=90.0,
+        min_road_or_cycleway_percentage=90.0,
+        min_suitability_7_plus_percentage=80.0,
+        max_footway_percentage=10.0,
+    )
+
+    assert not routing.training_window_meets_requirements(
+        analysis,
+        requirements,
+    )
+
+
+def test_training_window_requirements_reject_excessive_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            road_or_cycleway_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+            footway_percentage=0.0,
+        ),
+    )
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_training_window_comparison_metrics",
+        lambda _analysis: SimpleNamespace(
+            elevation_loss_rate_m_per_hour=120.0,
+            maneuvers_per_hour=15.0,
+        ),
+    )
+
+    requirements = routing.RouteTrainingWindowRequirements(
+        max_elevation_loss_rate_m_per_hour=100.0,
+        max_maneuvers_per_hour=10.0,
+    )
+
+    assert not routing.training_window_meets_requirements(
+        analysis,
+        requirements,
+    )
+
+
+def test_filter_training_window_analyses() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    good = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=99.0,
+            road_or_cycleway_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+            footway_percentage=0.0,
+        ),
+    )
+    bad = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=70.0,
+            road_or_cycleway_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+            footway_percentage=0.0,
+        ),
+    )
+
+    requirements = routing.RouteTrainingWindowRequirements(
+        min_asphalt_percentage=90.0,
+    )
+
+    assert routing.filter_training_window_analyses(
+        (bad, good),
+        requirements,
+    ) == (good,)
+
+
+def test_training_window_requirements_validate_ranges() -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = object()
+
+    with pytest.raises(
+        ValueError,
+        match="percentage requirements",
+    ):
+        routing.training_window_meets_requirements(
+            analysis,
+            routing.RouteTrainingWindowRequirements(
+                min_asphalt_percentage=101.0,
+            ),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="rate requirements",
+    ):
+        routing.training_window_meets_requirements(
+            analysis,
+            routing.RouteTrainingWindowRequirements(
+                max_maneuvers_per_hour=-1.0,
+            ),
+        )
+
+
+def test_find_best_training_window_filters_ineligible_analyses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = object()
+    timeline = object()
+
+    window_1 = object()
+    window_2 = object()
+
+    rejected = object()
+    eligible = object()
+
+    requirements = routing.RouteTrainingWindowRequirements(
+        min_asphalt_percentage=90.0,
+    )
+
+    monkeypatch.setattr(
+        routing,
+        "generate_training_window_candidates",
+        lambda *_args, **_kwargs: (window_1, window_2),
+    )
+    monkeypatch.setattr(
+        routing,
+        "analyze_training_window_candidates",
+        lambda *_args, **_kwargs: (rejected, eligible),
+    )
+    monkeypatch.setattr(
+        routing,
+        "filter_training_window_analyses",
+        lambda analyses, supplied_requirements: (
+            eligible,
+        )
+        if supplied_requirements is requirements
+        else analyses,
+    )
+    monkeypatch.setattr(
+        routing,
+        "rank_training_window_analyses",
+        lambda analyses: analyses,
+    )
+
+    best = routing.find_best_training_window(
+        route,
+        timeline,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        duration_s=1800.0,
+        requirements=requirements,
+    )
+
+    assert best is eligible
+
+
+def test_find_best_training_window_returns_none_when_all_ineligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    monkeypatch.setattr(
+        routing,
+        "generate_training_window_candidates",
+        lambda *_args, **_kwargs: (object(),),
+    )
+    monkeypatch.setattr(
+        routing,
+        "analyze_training_window_candidates",
+        lambda *_args, **_kwargs: (object(),),
+    )
+    monkeypatch.setattr(
+        routing,
+        "filter_training_window_analyses",
+        lambda *_args, **_kwargs: (),
+    )
+
+    best = routing.find_best_training_window(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        duration_s=1800.0,
+        requirements=routing.RouteTrainingWindowRequirements(
+            min_asphalt_percentage=90.0,
+        ),
+    )
+
+    assert best is None
+
+
+def test_find_best_training_windows_by_duration_passes_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    requirements = routing.RouteTrainingWindowRequirements(
+        min_asphalt_percentage=90.0,
+    )
+
+    calls: list[object] = []
+
+    def fake_find_best(*_args: object, **kwargs: object) -> object:
+        calls.append(kwargs["requirements"])
+        return object()
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_window",
+        fake_find_best,
+    )
+
+    routing.find_best_training_windows_by_duration(
+        object(),
+        object(),
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 1800.0, 2400.0),
+        requirements=requirements,
+    )
+
+    assert calls == [
+        requirements,
+        requirements,
+        requirements,
+    ]
