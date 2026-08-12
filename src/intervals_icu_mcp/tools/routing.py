@@ -3890,6 +3890,14 @@ def serialize_cycling_route_candidate_analysis(
             if analysis.route_quality is not None
             else None
         ),
+        "training_block_sequence": (
+            serialize_training_block_sequence_analysis(
+                route,
+                analysis.best_training_block_sequence,
+            )
+            if analysis.best_training_block_sequence is not None
+            else None
+        ),
     }
 
 
@@ -4307,6 +4315,18 @@ async def find_cycling_training_route(
         list[float] | None,
         "Candidate continuous training-block durations; defaults to 20, 30 and 40.",
     ] = None,
+    training_repetitions: Annotated[
+        int,
+        "Number of equal-duration work blocks; one keeps continuous mode.",
+    ] = 1,
+    recovery_min_minutes: Annotated[
+        float | None,
+        "Minimum recovery between repeated work blocks in minutes.",
+    ] = None,
+    recovery_max_minutes: Annotated[
+        float | None,
+        "Maximum recovery between repeated work blocks in minutes.",
+    ] = None,
     training_start_time_min_minutes: Annotated[
         float,
         "Earliest training-block start in minutes from departure.",
@@ -4432,6 +4452,24 @@ async def find_cycling_training_route(
         validation_error = "candidate_count must be between 2 and 10."
     elif not candidate_durations or any(value <= 0 for value in candidate_durations):
         validation_error = "Training-window durations must be greater than zero."
+    elif training_repetitions < 1:
+        validation_error = "training_repetitions must be at least one."
+    elif training_repetitions > 1 and len(candidate_durations) != 1:
+        validation_error = (
+            "Multi-block training requires exactly one work-block duration."
+        )
+    elif recovery_min_minutes is not None and recovery_min_minutes < 0:
+        validation_error = "recovery_min_minutes must not be negative."
+    elif recovery_max_minutes is not None and recovery_max_minutes < 0:
+        validation_error = "recovery_max_minutes must not be negative."
+    elif (
+        recovery_min_minutes is not None
+        and recovery_max_minutes is not None
+        and recovery_max_minutes < recovery_min_minutes
+    ):
+        validation_error = (
+            "recovery_max_minutes must not be less than recovery_min_minutes."
+        )
     elif training_start_time_min_minutes < 0:
         validation_error = "training_start_time_min_minutes must not be negative."
     elif training_start_time_max_minutes < training_start_time_min_minutes:
@@ -4477,6 +4515,25 @@ async def find_cycling_training_route(
             validation_error,
             error_type="validation_error",
         )
+
+    training_block_spec = (
+        TrainingBlockSpec(
+            work_duration_s=candidate_durations[0] * 60.0,
+            repetitions=training_repetitions,
+            recovery_min_s=(
+                recovery_min_minutes * 60.0
+                if recovery_min_minutes is not None
+                else None
+            ),
+            recovery_max_s=(
+                recovery_max_minutes * 60.0
+                if recovery_max_minutes is not None
+                else None
+            ),
+        )
+        if training_repetitions > 1
+        else None
+    )
 
     requirement_values = (
         min_asphalt_percentage,
@@ -4590,6 +4647,7 @@ async def find_cycling_training_route(
                 deduplication_proximity_m=deduplication_proximity_m,
                 requirements=requirements,
                 session_requirements=session_requirements,
+                training_block_spec=training_block_spec,
             )
 
         ranked = search_result.ranked
@@ -4657,6 +4715,11 @@ async def find_cycling_training_route(
                     max_distance_deviation_percentage
                 ),
                 "training_duration_minutes": candidate_durations,
+                "training_block_spec": (
+                    asdict(training_block_spec)
+                    if training_block_spec is not None
+                    else None
+                ),
                 "eligibility_requirements": asdict(requirements) if requirements else {},
                 "session_eligibility_requirements": (
                     asdict(session_requirements)

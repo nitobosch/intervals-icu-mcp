@@ -3966,6 +3966,7 @@ def test_serialize_cycling_route_candidate_analysis(
     warmup = object()
     cooldown = object()
     route_quality = object()
+    block_sequence = object()
     analysis = CyclingRouteCandidateAnalysis(
         candidate=CyclingRouteCandidate(
             candidate_id="round-trip-2",
@@ -3980,6 +3981,7 @@ def test_serialize_cycling_route_candidate_analysis(
         warmup=warmup,
         cooldown=cooldown,
         route_quality=route_quality,
+        best_training_block_sequence=block_sequence,
     )
     serialize_window = Mock(
         side_effect=lambda _route, window: {"window": id(window)}
@@ -3993,6 +3995,7 @@ def test_serialize_cycling_route_candidate_analysis(
         side_effect=lambda _route, segment: {"segment": id(segment)}
     )
     serialize_quality = Mock(return_value={"quality": "route"})
+    serialize_sequence = Mock(return_value={"sequence": "blocks"})
     monkeypatch.setattr(
         routing,
         "_serialize_route_session_segment_analysis",
@@ -4002,6 +4005,11 @@ def test_serialize_cycling_route_candidate_analysis(
         routing,
         "_serialize_cycling_route_quality_metrics",
         serialize_quality,
+    )
+    monkeypatch.setattr(
+        routing,
+        "serialize_training_block_sequence_analysis",
+        serialize_sequence,
     )
 
     result = routing.serialize_cycling_route_candidate_analysis(analysis)
@@ -4036,8 +4044,10 @@ def test_serialize_cycling_route_candidate_analysis(
     assert result["warmup"] == {"segment": id(warmup)}
     assert result["cooldown"] == {"segment": id(cooldown)}
     assert result["route_quality"] == {"quality": "route"}
+    assert result["training_block_sequence"] == {"sequence": "blocks"}
     assert serialize_segment.call_count == 2
     serialize_quality.assert_called_once_with(route_quality)
+    serialize_sequence.assert_called_once_with(route, block_sequence)
 
 
 def test_serialize_training_block_sequence_analysis() -> None:
@@ -4849,6 +4859,34 @@ async def test_find_cycling_training_route_validates_duration_before_ors(
     assert "target_duration_minutes" in response["error"]["message"]
 
 
+async def test_find_cycling_training_route_validates_multiblock_duration_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        training_repetitions=3,
+        training_durations_minutes=[8.0, 12.0],
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "exactly one work-block duration" in response["error"]["message"]
+
+
 async def test_find_cycling_training_route_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4914,6 +4952,9 @@ async def test_find_cycling_training_route_success(
         target_distance_km=50.0,
         target_duration_minutes=90.0,
         training_durations_minutes=[30.0],
+        training_repetitions=3,
+        recovery_min_minutes=5.0,
+        recovery_max_minutes=10.0,
         candidate_count=2,
         max_duration_deviation_percentage=20.0,
         include_gpx=True,
@@ -4945,6 +4986,12 @@ async def test_find_cycling_training_route_success(
     assert response["metadata"]["target_duration_minutes"] == 90.0
     assert response["metadata"]["max_duration_deviation_percentage"] == 20.0
     assert response["metadata"]["gpx_included"] is True
+    assert response["metadata"]["training_block_spec"] == {
+        "work_duration_s": 1800.0,
+        "repetitions": 3,
+        "recovery_min_s": 300.0,
+        "recovery_max_s": 600.0,
+    }
     assert response["metadata"]["session_eligibility_requirements"] == {
         "max_warmup_elevation_gain_rate_m_per_hour": None,
         "max_warmup_gradient_percentage": None,
@@ -4961,6 +5008,12 @@ async def test_find_cycling_training_route_success(
     search.assert_awaited_once()
     assert search.await_args.kwargs["target_distance_m"] == 50_000.0
     assert search.await_args.kwargs["durations_s"] == (1800.0,)
+    assert search.await_args.kwargs["training_block_spec"] == TrainingBlockSpec(
+        work_duration_s=1800.0,
+        repetitions=3,
+        recovery_min_s=300.0,
+        recovery_max_s=600.0,
+    )
     assert search.await_args.kwargs["target_duration_s"] == 5400.0
     assert search.await_args.kwargs["max_duration_deviation_percentage"] == 20.0
     assert (
