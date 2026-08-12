@@ -2351,6 +2351,9 @@ class CyclingRouteCandidateAnalysis:
     candidate: CyclingRouteCandidate
     best_training_window: RouteTrainingWindowAnalysis
     best_by_duration: tuple[RouteTrainingWindowAnalysis, ...]
+    warmup: RouteSessionSegmentAnalysis | None = None
+    cooldown: RouteSessionSegmentAnalysis | None = None
+    route_quality: CyclingRouteQualityMetrics | None = None
 
 
 def analyze_training_window(
@@ -2854,11 +2857,26 @@ def evaluate_cycling_route_candidates(
             continue
 
         ranked = rank_training_windows_across_durations(analyses)
+        best_training_window = ranked[0]
         results.append(
             CyclingRouteCandidateAnalysis(
                 candidate=candidate,
-                best_training_window=ranked[0],
+                best_training_window=best_training_window,
                 best_by_duration=analyses,
+                warmup=analyze_route_warmup(
+                    candidate.route,
+                    timeline,
+                    best_training_window.window,
+                ),
+                cooldown=analyze_route_cooldown(
+                    candidate.route,
+                    timeline,
+                    best_training_window.window,
+                ),
+                route_quality=calculate_cycling_route_quality_metrics(
+                    candidate.route,
+                    timeline,
+                ),
             )
         )
 
@@ -2984,19 +3002,62 @@ def serialize_cycling_route_candidate_analysis(
             _serialize_training_window_analysis(route, window_analysis)
             for window_analysis in analysis.best_by_duration
         ],
+        "warmup": (
+            _serialize_route_session_segment_analysis(route, analysis.warmup)
+            if analysis.warmup is not None
+            else None
+        ),
+        "cooldown": (
+            _serialize_route_session_segment_analysis(route, analysis.cooldown)
+            if analysis.cooldown is not None
+            else None
+        ),
+        "route_quality": (
+            _serialize_cycling_route_quality_metrics(analysis.route_quality)
+            if analysis.route_quality is not None
+            else None
+        ),
     }
+
+
+def _serialize_route_session_segment_analysis(
+    route: CyclingRoute,
+    analysis: RouteSessionSegmentAnalysis,
+) -> dict[str, Any]:
+    """Serialize one warmup or cooldown analysis."""
+
+    return _serialize_training_window_analysis(
+        route,
+        RouteTrainingWindowAnalysis(
+            window=analysis.segment,
+            quality=analysis.quality,
+            interruptions=analysis.interruptions,
+        ),
+        comparison=analysis.comparison,
+    )
+
+
+def _serialize_cycling_route_quality_metrics(
+    metrics: CyclingRouteQualityMetrics,
+) -> dict[str, Any]:
+    """Serialize complete-route quality metrics."""
+
+    return asdict(metrics)
 
 
 def _serialize_training_window_analysis(
     route: CyclingRoute,
     analysis: RouteTrainingWindowAnalysis,
+    *,
+    comparison: RouteTrainingWindowComparisonMetrics | None = None,
 ) -> dict[str, Any]:
     """Serialize one analyzed training window for the public MCP response."""
 
     window = analysis.window
-    comparison = calculate_training_window_comparison_metrics(
-        analysis,
-    )
+    if comparison is None:
+        comparison = calculate_training_window_comparison_metrics(
+            analysis,
+        )
 
     start_coordinate = route.geometry[
         window.start.geometry_index

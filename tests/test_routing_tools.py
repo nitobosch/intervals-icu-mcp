@@ -2804,13 +2804,18 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
             route=route,
         ),
     )
-    analysis = object()
+    window = object()
+    analysis = Mock(window=window)
+    warmup = object()
+    cooldown = object()
+    route_quality = object()
     timelines: list[CyclingRoute] = []
+    timeline = object()
 
     monkeypatch.setattr(
         routing,
         "calculate_route_timeline",
-        lambda candidate_route: timelines.append(candidate_route) or object(),
+        lambda candidate_route: timelines.append(candidate_route) or timeline,
     )
     find_mock = Mock(
         side_effect=[(analysis,), ()]
@@ -2825,6 +2830,16 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
         "rank_training_windows_across_durations",
         lambda analyses: analyses,
     )
+    analyze_warmup = Mock(return_value=warmup)
+    analyze_cooldown = Mock(return_value=cooldown)
+    calculate_quality = Mock(return_value=route_quality)
+    monkeypatch.setattr(routing, "analyze_route_warmup", analyze_warmup)
+    monkeypatch.setattr(routing, "analyze_route_cooldown", analyze_cooldown)
+    monkeypatch.setattr(
+        routing,
+        "calculate_cycling_route_quality_metrics",
+        calculate_quality,
+    )
 
     results = evaluate_cycling_route_candidates(
         candidates,
@@ -2838,7 +2853,13 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
     assert results[0].candidate is candidates[0]
     assert results[0].best_training_window is analysis
     assert results[0].best_by_duration == (analysis,)
+    assert results[0].warmup is warmup
+    assert results[0].cooldown is cooldown
+    assert results[0].route_quality is route_quality
     assert timelines == [route, route]
+    analyze_warmup.assert_called_once_with(route, timeline, window)
+    analyze_cooldown.assert_called_once_with(route, timeline, window)
+    calculate_quality.assert_called_once_with(route, timeline)
 
 
 def test_rank_cycling_route_candidates_prioritizes_best_window(
@@ -2991,6 +3012,9 @@ def test_serialize_cycling_route_candidate_analysis(
     route = _route_for_extra_tests({})
     best = object()
     other = object()
+    warmup = object()
+    cooldown = object()
+    route_quality = object()
     analysis = CyclingRouteCandidateAnalysis(
         candidate=CyclingRouteCandidate(
             candidate_id="round-trip-2",
@@ -3001,6 +3025,9 @@ def test_serialize_cycling_route_candidate_analysis(
         ),
         best_training_window=best,
         best_by_duration=(best, other),
+        warmup=warmup,
+        cooldown=cooldown,
+        route_quality=route_quality,
     )
     serialize_window = Mock(
         side_effect=lambda _route, window: {"window": id(window)}
@@ -3009,6 +3036,20 @@ def test_serialize_cycling_route_candidate_analysis(
         routing,
         "_serialize_training_window_analysis",
         serialize_window,
+    )
+    serialize_segment = Mock(
+        side_effect=lambda _route, segment: {"segment": id(segment)}
+    )
+    serialize_quality = Mock(return_value={"quality": "route"})
+    monkeypatch.setattr(
+        routing,
+        "_serialize_route_session_segment_analysis",
+        serialize_segment,
+    )
+    monkeypatch.setattr(
+        routing,
+        "_serialize_cycling_route_quality_metrics",
+        serialize_quality,
     )
 
     result = routing.serialize_cycling_route_candidate_analysis(analysis)
@@ -3034,6 +3075,11 @@ def test_serialize_cycling_route_candidate_analysis(
         {"window": id(best)},
         {"window": id(other)},
     ]
+    assert result["warmup"] == {"segment": id(warmup)}
+    assert result["cooldown"] == {"segment": id(cooldown)}
+    assert result["route_quality"] == {"quality": "route"}
+    assert serialize_segment.call_count == 2
+    serialize_quality.assert_called_once_with(route_quality)
 
 
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:
