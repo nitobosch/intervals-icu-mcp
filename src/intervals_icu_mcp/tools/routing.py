@@ -2251,6 +2251,9 @@ class CyclingRouteQualityMetrics:
     decline_10_plus_percentage: float
 
     maneuver_count: int
+    maneuver_rate_per_hour: float
+    roundabout_count: int
+    sharp_turn_count: int
 
 
 def calculate_cycling_route_quality_metrics(
@@ -2287,6 +2290,11 @@ def calculate_cycling_route_quality_metrics(
         decline_7_plus_percentage=quality.decline_7_plus_percentage,
         decline_10_plus_percentage=quality.decline_10_plus_percentage,
         maneuver_count=interruptions.maneuver_count,
+        maneuver_rate_per_hour=(
+            interruptions.maneuver_count / (route.duration_s / 3600.0)
+        ),
+        roundabout_count=interruptions.roundabout_count,
+        sharp_turn_count=interruptions.sharp_turn_count,
     )
 
 

@@ -2592,6 +2592,9 @@ def test_calculate_cycling_route_quality_metrics() -> None:
     assert metrics.decline_7_plus_percentage == pytest.approx(0.0)
     assert metrics.decline_10_plus_percentage == pytest.approx(0.0)
     assert metrics.maneuver_count == 2
+    assert metrics.maneuver_rate_per_hour == pytest.approx(120.0)
+    assert metrics.roundabout_count == 1
+    assert metrics.sharp_turn_count == 1
 
 
 def test_training_window_comparison_metrics_requires_elevation() -> None:
