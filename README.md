@@ -15,7 +15,7 @@ A Model Context Protocol (MCP) server for Intervals.icu integration. Access your
 
 ## Overview
 
-62 tools spanning activities, activity analysis, activity messages, athlete profile, wellness, events/calendar, performance curves, workout library, gear, sport settings, and custom items — plus 4 MCP Resources (athlete profile, workout syntax, event categories, custom item schemas) and 7 MCP Prompts (training analysis, recovery check, weekly planning, and more). See [Available Tools](#available-tools) for the per-category breakdown.
+63 tools spanning activities, activity analysis, activity messages, athlete profile, wellness, events/calendar, performance curves, workout library, gear, sport settings, and custom items — plus 4 MCP Resources (athlete profile, workout syntax, event categories, custom item schemas) and 7 MCP Prompts (training analysis, recovery check, weekly planning, and more). See [Available Tools](#available-tools) for the per-category breakdown.
 
 ## Quick Start
 
@@ -58,7 +58,7 @@ Before installation, obtain your Intervals.icu API key:
 
 ### Optional OpenRouteService API Key
 
-The cycling-routing tool `icu_find_best_cycling_training_window` uses OpenRouteService (ORS) to geocode locations, snap them to the road network, build a road-cycling route, and evaluate continuous training windows.
+The cycling-routing tools use OpenRouteService (ORS) to geocode and snap locations, evaluate training windows on defined routes, and generate ranked circular route candidates from a starting point.
 
 Routing is optional and does not affect the other Intervals.icu tools. To enable it, add these variables to the same environment used by the MCP server:
 
@@ -220,14 +220,14 @@ Ask Claude to interact with your Intervals.icu data in natural language. A few s
 "How's my recovery this week? Show HRV and sleep trends"
 "Create a sweet spot cycling workout for tomorrow"
 "What's my 20-minute power and FTP?"
-"Find the best continuous climbing block on my cycling route"
+"Find a 50 km circular cycling route with a 30-minute climbing block"
 ```
 
 For the full catalogue of example prompts by category, see [docs/examples.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/examples.md).
 
 ## Available Tools
 
-Up to 64 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 resources, and 7 prompt templates. Default `safe` mode registers 65 tools total; `full` registers 68 and `none` registers 62. Full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
+Up to 65 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 resources, and 7 prompt templates. Default `safe` mode registers 66 tools total; `full` registers 69 and `none` registers 63. Full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
 
 | Category | Tools | Summary |
 |---|---|---|
@@ -237,7 +237,7 @@ Up to 64 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tool
 | [Athlete](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#athlete-4-tools) | 4 | Profile, CTL/ATL/TSB analysis, fitness chart time-series, and athlete discovery |
 | [Wellness](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#wellness-4-tools) | 4 | HRV, sleep, wellness data, and recovery analysis |
 | [Events / Calendar](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#events--calendar-11-tools) | 11 | Planned workouts, races, notes, ATP periodization (bulk ops supported) |
-| [Cycling Routing](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#cycling-routing-1-tool) | 1 | Build a road-cycling route and select the best continuous training window |
+| [Cycling Routing](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#cycling-routing-2-tools) | 2 | Evaluate a defined route or generate and rank circular training routes |
 | [Performance / Curves](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#performance--curves-3-tools) | 3 | Power, HR, and pace curves with zones |
 | [Workout Library](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#workout-library-2-tools) | 2 | Browse workout folders and training plans |
 | [Gear Management](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#gear-management-6-tools) | 6 | Track equipment and maintenance reminders |

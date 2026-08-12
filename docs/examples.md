@@ -79,6 +79,8 @@ Requires `OPENROUTESERVICE_API_KEY`.
 "Find the best continuous climbing block on a route from Son Moix through Bunyola, Orient, Alaró and Santa Maria del Camí"
 "Compare 20, 30 and 40 minute climbing windows starting 20 to 30 minutes into this route"
 "Find the best climbing window, require at least 90% asphalt, and limit descending to 20 vertical meters per hour"
+"Starting at Son Moix, generate three circular routes around 50 km and rank them for a 30-minute climbing block after 20 to 30 minutes of warm-up"
+"Find a circular 80 km road route with a 40-minute continuous block, at least 90% asphalt, and no more than 20% distance deviation"
 ```
 
 ## Performance Analysis

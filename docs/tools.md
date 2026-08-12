@@ -1,6 +1,6 @@
 # Tool, Resource, and Prompt Reference
 
-Complete inventory of everything the Intervals.icu MCP server exposes: up to 64 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 MCP Resources, and 7 MCP Prompts.
+Complete inventory of everything the Intervals.icu MCP server exposes: up to 65 `icu_*` tools across 12 categories, plus 4 read-only direct Strava tools, 4 MCP Resources, and 7 MCP Prompts.
 
 ## Delete Safety Mode
 
@@ -8,9 +8,9 @@ Destructive tools are gated by the optional `INTERVALS_ICU_DELETE_MODE` env var.
 
 | Mode | Registered `icu_*` tools | Total incl. 4 Strava | Events | Activities | Gear | Sport settings | Custom items |
 |---|---:|---:|---|---|---|---|---|
-| `safe` (default) | 61 | 65 | tomorrow or later | ✗ | ✓ | ✗ | ✗ |
-| `full` | 64 | 68 | any date | ✓ | ✓ | ✓ | ✓ |
-| `none` | 58 | 62 | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `safe` (default) | 62 | 66 | tomorrow or later | ✗ | ✓ | ✗ | ✗ |
+| `full` | 65 | 69 | any date | ✓ | ✓ | ✓ | ✓ |
+| `none` | 59 | 63 | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 In `safe` mode, `icu_delete_event` and `icu_bulk_delete_events` return a uniform envelope showing what was deleted and what was skipped:
 
@@ -153,7 +153,7 @@ The threaded notes/comments shown under an activity — the user's own training 
 | `icu_duplicate_events`      | Duplicate one or more events with configurable copies and spacing |
 | `icu_apply_training_plan` | Apply an entire training plan (workout folder) onto the calendar |
 
-### Cycling Routing (1 tool)
+### Cycling Routing (2 tools)
 
 Requires `OPENROUTESERVICE_API_KEY`. `OPENROUTESERVICE_BASE_URL` is optional
 and defaults to `https://api.openrouteservice.org`.
@@ -161,8 +161,9 @@ and defaults to `https://api.openrouteservice.org`.
 | Tool | Description |
 | --- | --- |
 | `icu_find_best_cycling_training_window` | Build a road-cycling route through ordered place names or coordinates and select the best continuous climbing-oriented training window |
+| `icu_find_cycling_training_route` | Generate deterministic circular road-cycling candidates from one origin, evaluate their best training windows, discard infeasible routes, and return the best route plus eligible alternatives |
 
-The tool compares multiple candidate durations (20/30/40 minutes by default)
+The predefined-route tool compares multiple candidate durations (20/30/40 minutes by default)
 within a configurable start-time range. It returns a compact route summary,
 the best window for each eligible duration, and the best overall window using
 duration-normalized climbing metrics.
@@ -177,7 +178,18 @@ ranking:
 - maximum elevation-loss rate per hour
 - maximum maneuver rate per hour
 
-All eligibility thresholds are disabled by default.
+All training-window eligibility thresholds are disabled by default.
+
+`icu_find_cycling_training_route` accepts a target distance, generates 2–10
+round-trip candidates with deterministic ORS seeds, reuses the same window
+evaluator, and ranks eligible routes by best-window quality before target-distance
+fit. ORS treats round-trip length as a preferred value rather than a guarantee.
+The default uses two shaping points, verified to be more stable than larger values,
+and rejects routes whose absolute distance deviation exceeds 50%. Set
+`max_distance_deviation_percentage=null` to disable that route-level guard.
+
+The generated geometry and route-quality metrics are planning aids. They do not
+include real-time traffic, closures, weather, daylight, or a safety guarantee.
 
 ### Performance / Curves (3 tools)
 
