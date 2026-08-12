@@ -2691,6 +2691,39 @@ async def find_best_cycling_training_window(
         float,
         "Maximum network snap radius in meters for each route location.",
     ] = 350.0,
+    min_asphalt_percentage: Annotated[
+        float | None,
+        "Optional minimum asphalt percentage required in a training window.",
+    ] = None,
+    min_road_or_cycleway_percentage: Annotated[
+        float | None,
+        (
+            "Optional minimum road-or-cycleway percentage required "
+            "in a training window."
+        ),
+    ] = None,
+    min_suitability_7_plus_percentage: Annotated[
+        float | None,
+        (
+            "Optional minimum percentage with ORS cycling suitability "
+            "rating 7 or higher."
+        ),
+    ] = None,
+    max_footway_percentage: Annotated[
+        float | None,
+        "Optional maximum footway percentage allowed in a training window.",
+    ] = None,
+    max_elevation_loss_rate_m_per_hour: Annotated[
+        float | None,
+        (
+            "Optional maximum descending rate in meters of elevation "
+            "loss per hour."
+        ),
+    ] = None,
+    max_maneuvers_per_hour: Annotated[
+        float | None,
+        "Optional maximum maneuver rate per hour.",
+    ] = None,
     ctx: Context | None = None,
 ) -> str:
     """Find the best continuous climbing-oriented cycling training window.
@@ -2745,6 +2778,34 @@ async def find_best_cycling_training_window(
             error_type="validation_error",
         )
 
+    requirements_values = (
+        min_asphalt_percentage,
+        min_road_or_cycleway_percentage,
+        min_suitability_7_plus_percentage,
+        max_footway_percentage,
+        max_elevation_loss_rate_m_per_hour,
+        max_maneuvers_per_hour,
+    )
+
+    requirements = (
+        RouteTrainingWindowRequirements(
+            min_asphalt_percentage=min_asphalt_percentage,
+            min_road_or_cycleway_percentage=(
+                min_road_or_cycleway_percentage
+            ),
+            min_suitability_7_plus_percentage=(
+                min_suitability_7_plus_percentage
+            ),
+            max_footway_percentage=max_footway_percentage,
+            max_elevation_loss_rate_m_per_hour=(
+                max_elevation_loss_rate_m_per_hour
+            ),
+            max_maneuvers_per_hour=max_maneuvers_per_hour,
+        )
+        if any(value is not None for value in requirements_values)
+        else None
+    )
+
     try:
         async with OpenRouteServiceClient(config) as client:
             resolved_locations = [
@@ -2776,6 +2837,7 @@ async def find_best_cycling_training_window(
                 for duration in candidate_durations
             ),
             step_s=step_minutes * 60.0,
+            requirements=requirements,
         )
 
         if not analyses:
@@ -2823,6 +2885,11 @@ async def find_best_cycling_training_window(
                     start_time_max_minutes,
                 ],
                 "step_minutes": step_minutes,
+                "eligibility_requirements": (
+                    asdict(requirements)
+                    if requirements is not None
+                    else {}
+                ),
             },
             query_type="cycling_training_window",
         )

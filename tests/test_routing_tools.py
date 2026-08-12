@@ -2931,3 +2931,117 @@ def test_find_best_training_windows_by_duration_passes_requirements(
         requirements,
         requirements,
     ]
+
+
+async def test_find_best_cycling_training_window_passes_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    config = _config()
+    ctx = SimpleNamespace(
+        get_state=AsyncMock(return_value=config)
+    )
+
+    resolved = ResolvedLocation(
+        input_value="A",
+        source="coordinates",
+        label="A",
+        original_longitude=2.6,
+        original_latitude=39.5,
+        longitude=2.6,
+        latitude=39.5,
+        snapped_distance_m=0.0,
+    )
+
+    route = CyclingRoute(
+        distance_m=1000.0,
+        duration_s=600.0,
+        elevation_gain_m=100.0,
+        elevation_loss_m=0.0,
+        ors_ascent_m=100.0,
+        ors_descent_m=0.0,
+        geometry=(
+            RouteCoordinate(2.6, 39.5, 100.0),
+            RouteCoordinate(2.7, 39.6, 200.0),
+        ),
+        waypoint_indices=(0, 1),
+        segments=(),
+        extras={},
+    )
+
+    class FakeClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> None:
+            return None
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        routing,
+        "OpenRouteServiceClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        routing,
+        "resolve_location",
+        AsyncMock(return_value=resolved),
+    )
+    monkeypatch.setattr(
+        routing,
+        "build_cycling_route",
+        AsyncMock(return_value=route),
+    )
+    monkeypatch.setattr(
+        routing,
+        "calculate_route_timeline",
+        lambda _route: object(),
+    )
+
+    def fake_find(*_args: object, **kwargs: object) -> tuple[()]:
+        captured["requirements"] = kwargs["requirements"]
+        return ()
+
+    monkeypatch.setattr(
+        routing,
+        "find_best_training_windows_by_duration",
+        fake_find,
+    )
+
+    result = await routing.find_best_cycling_training_window(
+        locations=["A", "B"],
+        min_asphalt_percentage=90.0,
+        max_elevation_loss_rate_m_per_hour=20.0,
+        max_maneuvers_per_hour=12.0,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+
+    assert response["error"]["type"] == "not_found"
+
+    requirements = captured["requirements"]
+
+    assert isinstance(
+        requirements,
+        routing.RouteTrainingWindowRequirements,
+    )
+    assert requirements.min_asphalt_percentage == 90.0
+    assert (
+        requirements.max_elevation_loss_rate_m_per_hour
+        == 20.0
+    )
+    assert requirements.max_maneuvers_per_hour == 12.0
