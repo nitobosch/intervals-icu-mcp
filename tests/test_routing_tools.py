@@ -1953,3 +1953,104 @@ def test_analyze_training_window_candidates(
     assert analyses[1].window is window_2
     assert analyses[1].quality is quality
     assert analyses[1].interruptions is interruptions
+
+
+def test_rank_training_window_analyses_prefers_climbing_balance() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    def analysis(
+        gain: float,
+        loss: float,
+        *,
+        asphalt: float = 100.0,
+        road: float = 100.0,
+        suitability: float = 100.0,
+        maneuvers: int = 0,
+        roundabouts: int = 0,
+    ) -> object:
+        return SimpleNamespace(
+            window=SimpleNamespace(
+                elevation_gain_m=gain,
+                elevation_loss_m=loss,
+            ),
+            quality=SimpleNamespace(
+                asphalt_percentage=asphalt,
+                road_or_cycleway_percentage=road,
+                suitability_7_plus_percentage=suitability,
+            ),
+            interruptions=SimpleNamespace(
+                maneuver_count=maneuvers,
+                roundabout_count=roundabouts,
+            ),
+        )
+
+    clean_climb = analysis(489.0, 4.6)
+    later_window = analysis(482.7, 23.6)
+
+    ranked = routing.rank_training_window_analyses(
+        (later_window, clean_climb),
+    )
+
+    assert ranked == (clean_climb, later_window)
+
+
+def test_rank_training_window_analyses_uses_quality_as_tiebreaker() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    def analysis(asphalt: float) -> object:
+        return SimpleNamespace(
+            window=SimpleNamespace(
+                elevation_gain_m=400.0,
+                elevation_loss_m=10.0,
+            ),
+            quality=SimpleNamespace(
+                asphalt_percentage=asphalt,
+                road_or_cycleway_percentage=100.0,
+                suitability_7_plus_percentage=100.0,
+            ),
+            interruptions=SimpleNamespace(
+                maneuver_count=0,
+                roundabout_count=0,
+            ),
+        )
+
+    lower_quality = analysis(95.0)
+    higher_quality = analysis(99.0)
+
+    ranked = routing.rank_training_window_analyses(
+        (lower_quality, higher_quality),
+    )
+
+    assert ranked == (higher_quality, lower_quality)
+
+
+def test_rank_training_window_analyses_requires_elevation() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        window=SimpleNamespace(
+            elevation_gain_m=None,
+            elevation_loss_m=None,
+        ),
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            road_or_cycleway_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+        ),
+        interruptions=SimpleNamespace(
+            maneuver_count=0,
+            roundabout_count=0,
+        ),
+    )
+
+    with pytest.raises(
+        routing.RouteParsingError,
+        match="requires elevation gain and loss",
+    ):
+        routing.rank_training_window_analyses((analysis,))

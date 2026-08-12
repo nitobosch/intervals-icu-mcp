@@ -2221,3 +2221,44 @@ def analyze_training_window_candidates(
         analyze_training_window(route, window)
         for window in windows
     )
+
+
+def _training_window_rank_key(
+    analysis: RouteTrainingWindowAnalysis,
+) -> tuple[float, float, float, float, float, float, float, float]:
+    """Return a deterministic lexicographic ranking key for climb windows."""
+
+    elevation_gain_m = analysis.window.elevation_gain_m
+    elevation_loss_m = analysis.window.elevation_loss_m
+
+    if elevation_gain_m is None or elevation_loss_m is None:
+        raise RouteParsingError(
+            "Training window ranking requires elevation gain and loss."
+        )
+
+    climbing_balance_m = elevation_gain_m - elevation_loss_m
+
+    return (
+        climbing_balance_m,
+        elevation_gain_m,
+        -elevation_loss_m,
+        analysis.quality.asphalt_percentage,
+        analysis.quality.road_or_cycleway_percentage,
+        analysis.quality.suitability_7_plus_percentage,
+        -float(analysis.interruptions.maneuver_count),
+        -float(analysis.interruptions.roundabout_count),
+    )
+
+
+def rank_training_window_analyses(
+    analyses: tuple[RouteTrainingWindowAnalysis, ...],
+) -> tuple[RouteTrainingWindowAnalysis, ...]:
+    """Rank climb-window analyses without combining metrics into weighted scores."""
+
+    return tuple(
+        sorted(
+            analyses,
+            key=_training_window_rank_key,
+            reverse=True,
+        )
+    )
