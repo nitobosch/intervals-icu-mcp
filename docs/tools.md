@@ -181,9 +181,48 @@ ranking:
 All training-window eligibility thresholds are disabled by default.
 
 `icu_find_cycling_training_route` accepts a target distance, generates 2–10
-round-trip candidates with deterministic ORS seeds, reuses the same window
-evaluator, and ranks eligible routes by best-window quality before target-distance
-fit. ORS treats round-trip length as a preferred value rather than a guarantee.
+round-trip candidates with deterministic ORS seeds, and analyzes the complete
+session. Each candidate includes the best training window, warmup (departure to
+window start), cooldown (window end to arrival), and route-level quality. Segment
+responses include duration, distance, elevation, normalized climbing and maneuver
+rates, surface/suitability percentages, and interruption counts. Route-level
+quality also includes surface, way type, steepness, maneuver rate, roundabouts,
+and sharp turns.
+
+Ranking is deterministic and lexicographic: training-window quality remains the
+primary criterion, followed by warmup cleanliness, cooldown ease, overall route
+quality, target-distance fit, and seed. There is no weighted aggregate score.
+
+Optional hard requirements can constrain warmup and cooldown independently:
+
+- maximum elevation-gain rate per hour
+- maximum net gradient
+- maximum maneuver rate per hour
+- minimum asphalt percentage
+- maximum footway percentage
+
+All session requirements default to `null`. They filter candidates and remain
+separate from ranking. Enabling a requirement for a missing segment makes that
+candidate ineligible. Applied requirements are echoed in
+`metadata.session_eligibility_requirements`.
+
+For example, a client can request a 30 km route with a 20-minute block starting
+10–15 minutes after departure, at most 8 warmup maneuvers per hour, and no more
+than 300 m/h of climbing during cooldown:
+
+```json
+{
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 30,
+  "training_durations_minutes": [20],
+  "training_start_time_min_minutes": 10,
+  "training_start_time_max_minutes": 15,
+  "max_warmup_maneuvers_per_hour": 8,
+  "max_cooldown_elevation_gain_rate_m_per_hour": 300
+}
+```
+
+ORS treats round-trip length as a preferred value rather than a guarantee.
 The default uses two shaping points, verified to be more stable than larger values,
 and rejects routes whose absolute distance deviation exceeds 50%. Set
 `max_distance_deviation_percentage=null` to disable that route-level guard.
