@@ -2381,3 +2381,36 @@ def calculate_training_window_comparison_metrics(
             analysis.interruptions.maneuver_count / duration_hours
         ),
     )
+
+
+def _cross_duration_training_window_rank_key(
+    analysis: RouteTrainingWindowAnalysis,
+) -> tuple[float, float, float, float, float, float]:
+    """Return a duration-neutral ranking key for training windows."""
+
+    comparison = calculate_training_window_comparison_metrics(
+        analysis,
+    )
+
+    return (
+        comparison.climbing_balance_rate_m_per_hour,
+        comparison.climbing_balance_gradient_percentage,
+        -comparison.elevation_loss_rate_m_per_hour,
+        analysis.quality.asphalt_percentage,
+        analysis.quality.suitability_7_plus_percentage,
+        -comparison.maneuvers_per_hour,
+    )
+
+
+def rank_training_windows_across_durations(
+    analyses: tuple[RouteTrainingWindowAnalysis, ...],
+) -> tuple[RouteTrainingWindowAnalysis, ...]:
+    """Rank training windows of different durations using normalized metrics."""
+
+    return tuple(
+        sorted(
+            analyses,
+            key=_cross_duration_training_window_rank_key,
+            reverse=True,
+        )
+    )

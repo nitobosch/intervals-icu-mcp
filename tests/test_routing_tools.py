@@ -2289,3 +2289,99 @@ def test_training_window_comparison_metrics_requires_elevation() -> None:
         routing.calculate_training_window_comparison_metrics(
             analysis,
         )
+
+
+def test_rank_training_windows_across_durations_prefers_balance_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis_20 = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+        )
+    )
+    analysis_30 = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+        )
+    )
+
+    metrics = {
+        id(analysis_20): SimpleNamespace(
+            climbing_balance_rate_m_per_hour=930.0,
+            climbing_balance_gradient_percentage=4.0,
+            elevation_loss_rate_m_per_hour=10.0,
+            maneuvers_per_hour=10.0,
+        ),
+        id(analysis_30): SimpleNamespace(
+            climbing_balance_rate_m_per_hour=970.0,
+            climbing_balance_gradient_percentage=3.8,
+            elevation_loss_rate_m_per_hour=9.0,
+            maneuvers_per_hour=12.0,
+        ),
+    }
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_training_window_comparison_metrics",
+        lambda analysis: metrics[id(analysis)],
+    )
+
+    ranked = routing.rank_training_windows_across_durations(
+        (analysis_20, analysis_30),
+    )
+
+    assert ranked == (analysis_30, analysis_20)
+
+
+def test_rank_training_windows_across_durations_uses_gradient_tiebreaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    lower_gradient = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+        )
+    )
+    higher_gradient = SimpleNamespace(
+        quality=SimpleNamespace(
+            asphalt_percentage=100.0,
+            suitability_7_plus_percentage=100.0,
+        )
+    )
+
+    metrics = {
+        id(lower_gradient): SimpleNamespace(
+            climbing_balance_rate_m_per_hour=900.0,
+            climbing_balance_gradient_percentage=3.0,
+            elevation_loss_rate_m_per_hour=10.0,
+            maneuvers_per_hour=5.0,
+        ),
+        id(higher_gradient): SimpleNamespace(
+            climbing_balance_rate_m_per_hour=900.0,
+            climbing_balance_gradient_percentage=4.0,
+            elevation_loss_rate_m_per_hour=10.0,
+            maneuvers_per_hour=5.0,
+        ),
+    }
+
+    monkeypatch.setattr(
+        routing,
+        "calculate_training_window_comparison_metrics",
+        lambda analysis: metrics[id(analysis)],
+    )
+
+    ranked = routing.rank_training_windows_across_durations(
+        (lower_gradient, higher_gradient),
+    )
+
+    assert ranked == (higher_gradient, lower_gradient)
