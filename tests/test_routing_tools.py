@@ -18,12 +18,14 @@ from intervals_icu_mcp.tools.routing import (
     RouteQualityMetrics,
     RouteTimeline,
     RouteTimelinePoint,
+    RouteTrainingWindow,
     build_cycling_route,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
     calculate_route_extra_distributions,
     calculate_route_quality_metrics,
     calculate_route_timeline,
+    calculate_training_window,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -1426,4 +1428,111 @@ def test_timeline_point_at_time_rejects_out_of_range_time() -> None:
         timeline_point_at_time(
             timeline,
             31.0,
+        )
+
+
+def test_calculate_training_window_uses_timeline_boundaries() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=10.0,
+        duration_s=20.0,
+    )
+
+    assert isinstance(window, RouteTrainingWindow)
+    assert window.start.geometry_index == 1
+    assert window.end.geometry_index == 3
+
+    assert window.duration_s == pytest.approx(20.0)
+    assert window.distance_m == pytest.approx(
+        timeline.points[3].distance_m
+        - timeline.points[1].distance_m
+    )
+
+    assert window.net_elevation_gain_m == pytest.approx(
+        20.0
+    )
+
+
+def test_calculate_training_window_reports_elevation_metrics() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    assert window.elevation_gain_m is not None
+    assert window.elevation_loss_m is not None
+    assert window.elevation_gain_m > 0
+    assert window.elevation_loss_m >= 0
+
+
+def test_calculate_training_window_rejects_invalid_duration() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(
+        ValueError,
+        match="greater than zero",
+    ):
+        calculate_training_window(
+            route,
+            timeline,
+            start_time_s=0.0,
+            duration_s=0.0,
+        )
+
+
+def test_calculate_training_window_rejects_window_past_route_end() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    with pytest.raises(
+        ValueError,
+        match="exceeds route timeline duration",
+    ):
+        calculate_training_window(
+            route,
+            timeline,
+            start_time_s=20.0,
+            duration_s=20.0,
         )

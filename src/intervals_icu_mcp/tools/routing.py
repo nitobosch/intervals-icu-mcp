@@ -1714,3 +1714,84 @@ def timeline_point_at_time(
         return before
 
     return after
+
+
+@dataclass(frozen=True)
+class RouteTrainingWindow:
+    """Metrics for a time-bounded training window on a route."""
+
+    start: RouteTimelinePoint
+    end: RouteTimelinePoint
+
+    distance_m: float
+    duration_s: float
+
+    elevation_gain_m: float | None
+    elevation_loss_m: float | None
+    net_elevation_gain_m: float | None
+
+
+def calculate_training_window(
+    route: CyclingRoute,
+    timeline: RouteTimeline,
+    *,
+    start_time_s: float,
+    duration_s: float,
+) -> RouteTrainingWindow:
+    """Calculate metrics for a training window defined by route time."""
+
+    if duration_s <= 0:
+        raise ValueError("duration_s must be greater than zero.")
+
+    end_time_s = start_time_s + duration_s
+
+    if end_time_s > timeline.duration_s:
+        raise ValueError(
+            "training window exceeds route timeline duration."
+        )
+
+    start = timeline_point_at_time(
+        timeline,
+        start_time_s,
+    )
+    end = timeline_point_at_time(
+        timeline,
+        end_time_s,
+    )
+
+    if end.geometry_index <= start.geometry_index:
+        raise RouteParsingError(
+            "Training window does not span route geometry."
+        )
+
+    window_geometry = route.geometry[
+        start.geometry_index : end.geometry_index + 1
+    ]
+
+    elevation_gain_m, elevation_loss_m = (
+        calculate_elevation_gain_loss(
+            window_geometry
+        )
+    )
+
+    start_elevation = start.elevation_m
+    end_elevation = end.elevation_m
+
+    net_elevation_gain_m = (
+        end_elevation - start_elevation
+        if (
+            start_elevation is not None
+            and end_elevation is not None
+        )
+        else None
+    )
+
+    return RouteTrainingWindow(
+        start=start,
+        end=end,
+        distance_m=end.distance_m - start.distance_m,
+        duration_s=end.time_s - start.time_s,
+        elevation_gain_m=elevation_gain_m,
+        elevation_loss_m=elevation_loss_m,
+        net_elevation_gain_m=net_elevation_gain_m,
+    )
