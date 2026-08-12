@@ -22,10 +22,12 @@ from intervals_icu_mcp.tools.routing import (
     build_cycling_route,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
+    calculate_extra_distribution_for_geometry_range,
     calculate_route_extra_distributions,
     calculate_route_quality_metrics,
     calculate_route_timeline,
     calculate_training_window,
+    calculate_training_window_extra_distributions,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -1536,3 +1538,102 @@ def test_calculate_training_window_rejects_window_past_route_end() -> None:
             start_time_s=20.0,
             duration_s=20.0,
         )
+
+
+def test_extra_distribution_for_geometry_range_clips_values() -> None:
+    route = _route_for_extra_tests(
+        {
+            "surface": {
+                "values": [
+                    [0, 1, 3],
+                    [1, 2, 0],
+                ]
+            }
+        }
+    )
+
+    result = calculate_extra_distribution_for_geometry_range(
+        route,
+        "surface",
+        start_index=0,
+        end_index=1,
+    )
+
+    assert result.geometry_distance_m > 0
+    assert result.unclassified_distance_m == pytest.approx(0.0)
+    assert len(result.values) == 1
+    assert result.values[0].value == 3
+    assert result.values[0].percentage == pytest.approx(100.0)
+
+
+def test_extra_distribution_for_geometry_range_reports_missing_extra() -> None:
+    route = _route_for_extra_tests({})
+
+    result = calculate_extra_distribution_for_geometry_range(
+        route,
+        "surface",
+        start_index=0,
+        end_index=1,
+    )
+
+    assert result.values == ()
+    assert result.classified_distance_m == 0.0
+    assert result.unclassified_distance_m == pytest.approx(
+        result.geometry_distance_m
+    )
+
+
+def test_training_window_extra_distributions_returns_all_extras() -> None:
+    extras = {
+        "surface": {"values": [[0, 3, 3]]},
+        "waytype": {"values": [[0, 3, 2]]},
+        "steepness": {"values": [[0, 3, 1]]},
+        "suitability": {"values": [[0, 3, 8]]},
+    }
+
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    route = CyclingRoute(
+        distance_m=route.distance_m,
+        duration_s=route.duration_s,
+        elevation_gain_m=route.elevation_gain_m,
+        elevation_loss_m=route.elevation_loss_m,
+        ors_ascent_m=route.ors_ascent_m,
+        ors_descent_m=route.ors_descent_m,
+        geometry=route.geometry,
+        waypoint_indices=route.waypoint_indices,
+        segments=route.segments,
+        extras=extras,
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    distributions = calculate_training_window_extra_distributions(
+        route,
+        window,
+    )
+
+    assert set(distributions) == {
+        "surface",
+        "waytype",
+        "steepness",
+        "suitability",
+    }
+
+    for distribution in distributions.values():
+        assert distribution.unclassified_distance_m == pytest.approx(0.0)
+        assert distribution.values[0].percentage == pytest.approx(100.0)

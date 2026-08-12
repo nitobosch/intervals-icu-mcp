@@ -1795,3 +1795,166 @@ def calculate_training_window(
         elevation_loss_m=elevation_loss_m,
         net_elevation_gain_m=net_elevation_gain_m,
     )
+
+
+def calculate_extra_distribution_for_geometry_range(
+    route: CyclingRoute,
+    extra_name: str,
+    *,
+    start_index: int,
+    end_index: int,
+) -> RouteExtraDistribution:
+    """Calculate an ORS extra distribution clipped to a geometry range."""
+
+    if (
+        start_index < 0
+        or end_index <= start_index
+        or end_index >= len(route.geometry)
+    ):
+        raise ValueError("Invalid geometry range.")
+
+    cumulative = _geometry_cumulative_distances(
+        route.geometry
+    )
+
+    geometry_distance_m = (
+        cumulative[end_index]
+        - cumulative[start_index]
+    )
+
+    raw_extra = route.extras.get(extra_name)
+
+    if not isinstance(raw_extra, dict):
+        return RouteExtraDistribution(
+            name=extra_name,
+            geometry_distance_m=geometry_distance_m,
+            classified_distance_m=0.0,
+            unclassified_distance_m=geometry_distance_m,
+            values=(),
+        )
+
+    extra = cast(dict[str, Any], raw_extra)
+    raw_values = extra.get("values")
+
+    if not isinstance(raw_values, list):
+        return RouteExtraDistribution(
+            name=extra_name,
+            geometry_distance_m=geometry_distance_m,
+            classified_distance_m=0.0,
+            unclassified_distance_m=geometry_distance_m,
+            values=(),
+        )
+
+    value_ranges = cast(list[Any], raw_values)
+
+    distances_by_value: dict[int, float] = {}
+    classified_distance_m = 0.0
+
+    for raw_range in value_ranges:
+        if not isinstance(raw_range, list):
+            raise RouteParsingError(
+                f"OpenRouteService returned an invalid {extra_name} range."
+            )
+
+        range_items = cast(list[Any], raw_range)
+
+        if len(range_items) < 3:
+            raise RouteParsingError(
+                f"OpenRouteService returned an incomplete {extra_name} range."
+            )
+
+        start_value = _numeric_value(range_items[0])
+        end_value = _numeric_value(range_items[1])
+        category_value = _numeric_value(range_items[2])
+
+        if (
+            start_value is None
+            or end_value is None
+            or category_value is None
+            or not start_value.is_integer()
+            or not end_value.is_integer()
+            or not category_value.is_integer()
+        ):
+            raise RouteParsingError(
+                f"OpenRouteService returned a non-integer {extra_name} range."
+            )
+
+        range_start = int(start_value)
+        range_end = int(end_value)
+        value = int(category_value)
+
+        if (
+            range_start < 0
+            or range_end < range_start
+            or range_end >= len(route.geometry)
+        ):
+            raise RouteParsingError(
+                f"OpenRouteService returned an out-of-range {extra_name} interval."
+            )
+
+        overlap_start = max(
+            start_index,
+            range_start,
+        )
+        overlap_end = min(
+            end_index,
+            range_end,
+        )
+
+        if overlap_end <= overlap_start:
+            continue
+
+        distance_m = (
+            cumulative[overlap_end]
+            - cumulative[overlap_start]
+        )
+
+        classified_distance_m += distance_m
+
+        distances_by_value[value] = (
+            distances_by_value.get(value, 0.0)
+            + distance_m
+        )
+
+    values = tuple(
+        RouteExtraValue(
+            value=value,
+            distance_m=distance_m,
+            percentage=(
+                distance_m / geometry_distance_m * 100.0
+                if geometry_distance_m > 0
+                else 0.0
+            ),
+        )
+        for value, distance_m in sorted(
+            distances_by_value.items()
+        )
+    )
+
+    return RouteExtraDistribution(
+        name=extra_name,
+        geometry_distance_m=geometry_distance_m,
+        classified_distance_m=classified_distance_m,
+        unclassified_distance_m=max(
+            0.0,
+            geometry_distance_m - classified_distance_m,
+        ),
+        values=values,
+    )
+
+
+def calculate_training_window_extra_distributions(
+    route: CyclingRoute,
+    window: RouteTrainingWindow,
+) -> dict[str, RouteExtraDistribution]:
+    """Calculate ORS extra distributions inside a training window."""
+
+    return {
+        extra_name: calculate_extra_distribution_for_geometry_range(
+            route,
+            extra_name,
+            start_index=window.start.geometry_index,
+            end_index=window.end.geometry_index,
+        )
+        for extra_name in _ROUTING_EXTRA_INFO
+    }
