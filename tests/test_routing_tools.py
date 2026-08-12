@@ -944,6 +944,47 @@ async def test_generate_cycling_route_candidates_uses_deterministic_seeds() -> N
         }
 
 
+async def test_generate_cycling_route_candidates_filters_distance_deviation() -> None:
+    origin = _resolved_location("Start", 2.63, 39.59)
+
+    def response(distance_m: float) -> dict[str, object]:
+        return {
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.63, 39.59, 100.0],
+                            [2.64, 39.60, 110.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": distance_m,
+                            "duration": 5000.0,
+                        }
+                    },
+                }
+            ]
+        }
+
+    directions = AsyncMock(
+        side_effect=[response(55_000.0), response(100_000.0)]
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.directions = directions  # type: ignore[method-assign]
+        candidates = await generate_cycling_route_candidates(
+            client,
+            origin,
+            target_distance_m=50_000.0,
+            candidate_count=2,
+            max_distance_deviation_percentage=50.0,
+        )
+
+    assert [candidate.seed for candidate in candidates] == [0]
+    assert candidates[0].route.distance_m == 55_000.0
+
+
 async def test_generate_cycling_route_candidates_validates_inputs() -> None:
     origin = _resolved_location("Start", 2.63, 39.59)
 
@@ -2758,6 +2799,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         candidate_count=3,
         round_trip_points=2,
         seed_start=0,
+        max_distance_deviation_percentage=50.0,
     )
     evaluate.assert_called_once_with(
         generated,

@@ -1227,6 +1227,7 @@ async def generate_cycling_route_candidates(
     candidate_count: int,
     round_trip_points: int = 2,
     seed_start: int = 0,
+    max_distance_deviation_percentage: float | None = 50.0,
 ) -> tuple[CyclingRouteCandidate, ...]:
     """Generate deterministic road-cycling round-trip candidates."""
 
@@ -1238,6 +1239,14 @@ async def generate_cycling_route_candidates(
 
     if round_trip_points < 1:
         raise ValueError("round_trip_points must be at least one")
+
+    if (
+        max_distance_deviation_percentage is not None
+        and max_distance_deviation_percentage < 0
+    ):
+        raise ValueError(
+            "max_distance_deviation_percentage must not be negative"
+        )
 
     candidates: list[CyclingRouteCandidate] = []
 
@@ -1257,13 +1266,27 @@ async def generate_cycling_route_candidates(
                 }
             },
         )
+        route = parse_cycling_route_response(data)
+        distance_deviation_percentage = (
+            abs(route.distance_m - target_distance_m)
+            / target_distance_m
+            * 100.0
+        )
+
+        if (
+            max_distance_deviation_percentage is not None
+            and distance_deviation_percentage
+            > max_distance_deviation_percentage
+        ):
+            continue
+
         candidates.append(
             CyclingRouteCandidate(
                 candidate_id=f"round-trip-{index + 1}",
                 strategy="ors_round_trip",
                 seed=seed,
                 target_distance_m=target_distance_m,
-                route=parse_cycling_route_response(data),
+                route=route,
             )
         )
 
@@ -2756,6 +2779,7 @@ async def find_cycling_training_route_candidates(
     step_s: float = 60.0,
     round_trip_points: int = 2,
     seed_start: int = 0,
+    max_distance_deviation_percentage: float | None = 50.0,
     requirements: RouteTrainingWindowRequirements | None = None,
 ) -> tuple[CyclingRouteCandidateAnalysis, ...]:
     """Generate, evaluate and rank cycling training route candidates."""
@@ -2767,6 +2791,9 @@ async def find_cycling_training_route_candidates(
         candidate_count=candidate_count,
         round_trip_points=round_trip_points,
         seed_start=seed_start,
+        max_distance_deviation_percentage=(
+            max_distance_deviation_percentage
+        ),
     )
     analyses = evaluate_cycling_route_candidates(
         candidates,
@@ -3186,6 +3213,10 @@ async def find_cycling_training_route(
         int,
         "ORS shaping-point count used to generate each circular route.",
     ] = 2,
+    max_distance_deviation_percentage: Annotated[
+        float | None,
+        "Maximum absolute route-distance deviation; defaults to 50 percent.",
+    ] = 50.0,
     country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
     focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
     focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,
@@ -3242,6 +3273,13 @@ async def find_cycling_training_route(
         validation_error = "round_trip_points must be at least one."
     elif snap_radius_m <= 0:
         validation_error = "snap_radius_m must be greater than zero."
+    elif (
+        max_distance_deviation_percentage is not None
+        and max_distance_deviation_percentage < 0
+    ):
+        validation_error = (
+            "max_distance_deviation_percentage must not be negative."
+        )
 
     if validation_error:
         return ResponseBuilder.build_error_response(
@@ -3299,6 +3337,9 @@ async def find_cycling_training_route(
                 durations_s=tuple(value * 60.0 for value in candidate_durations),
                 step_s=step_minutes * 60.0,
                 round_trip_points=round_trip_points,
+                max_distance_deviation_percentage=(
+                    max_distance_deviation_percentage
+                ),
                 requirements=requirements,
             )
 
@@ -3323,6 +3364,9 @@ async def find_cycling_training_route(
                 "candidate_count_requested": candidate_count,
                 "candidate_count_eligible": len(serialized),
                 "target_distance_kilometers": target_distance_km,
+                "max_distance_deviation_percentage": (
+                    max_distance_deviation_percentage
+                ),
                 "training_duration_minutes": candidate_durations,
                 "eligibility_requirements": asdict(requirements) if requirements else {},
             },
