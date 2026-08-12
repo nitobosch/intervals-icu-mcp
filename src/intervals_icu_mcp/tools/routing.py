@@ -2893,12 +2893,18 @@ def evaluate_cycling_route_candidates(
 
 def _cycling_route_candidate_rank_key(
     analysis: CyclingRouteCandidateAnalysis,
-) -> tuple[float, float, float, float, float, float, float, float]:
+) -> tuple[float, ...]:
     """Return a deterministic route-level ranking key."""
 
     window_key = _cross_duration_training_window_rank_key(
         analysis.best_training_window
     )
+    warmup_key = _session_segment_cleanliness_rank_key(analysis.warmup)
+    cooldown_key = _session_segment_cleanliness_rank_key(
+        analysis.cooldown,
+        prioritize_low_climbing=True,
+    )
+    route_quality_key = _route_quality_rank_key(analysis.route_quality)
     candidate = analysis.candidate
     distance_deviation_ratio = abs(
         candidate.route.distance_m - candidate.target_distance_m
@@ -2906,8 +2912,67 @@ def _cycling_route_candidate_rank_key(
 
     return (
         *window_key,
+        *warmup_key,
+        *cooldown_key,
+        *route_quality_key,
         -distance_deviation_ratio,
         -float(candidate.seed),
+    )
+
+
+def _session_segment_cleanliness_rank_key(
+    analysis: RouteSessionSegmentAnalysis | None,
+    *,
+    prioritize_low_climbing: bool = False,
+) -> tuple[float, ...]:
+    """Rank one session segment with explicit, duration-neutral metrics."""
+
+    if analysis is None:
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    quality = analysis.quality
+    comparison = analysis.comparison
+    climbing_key = -comparison.elevation_gain_rate_m_per_hour
+    interruption_key = -comparison.maneuvers_per_hour
+
+    if prioritize_low_climbing:
+        return (
+            1.0,
+            climbing_key,
+            interruption_key,
+            quality.asphalt_percentage,
+            quality.suitability_7_plus_percentage,
+            -quality.footway_percentage,
+        )
+
+    return (
+        1.0,
+        interruption_key,
+        quality.asphalt_percentage,
+        quality.suitability_7_plus_percentage,
+        -quality.footway_percentage,
+        climbing_key,
+    )
+
+
+def _route_quality_rank_key(
+    quality: CyclingRouteQualityMetrics | None,
+) -> tuple[float, ...]:
+    """Rank complete-route quality without a weighted aggregate score."""
+
+    if quality is None:
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    return (
+        1.0,
+        quality.asphalt_percentage,
+        quality.suitability_7_plus_percentage,
+        quality.road_or_cycleway_percentage,
+        -quality.footway_percentage,
+        -quality.unknown_surface_percentage,
+        -quality.maneuver_rate_per_hour,
+        -float(quality.sharp_turn_count),
+        -float(quality.roundabout_count),
     )
 
 

@@ -2958,6 +2958,106 @@ def test_rank_cycling_route_candidates_uses_distance_tiebreaker(
     )
 
 
+def test_rank_cycling_route_candidates_uses_session_quality_tiebreakers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    common_window = object()
+
+    def segment(
+        maneuvers_per_hour: float,
+        elevation_gain_rate_m_per_hour: float = 100.0,
+    ):
+        return SimpleNamespace(
+            quality=SimpleNamespace(
+                asphalt_percentage=100.0,
+                suitability_7_plus_percentage=100.0,
+                footway_percentage=0.0,
+            ),
+            comparison=SimpleNamespace(
+                elevation_gain_rate_m_per_hour=elevation_gain_rate_m_per_hour,
+                maneuvers_per_hour=maneuvers_per_hour,
+            ),
+        )
+
+    def analyzed(
+        candidate_id: str,
+        *,
+        warmup_maneuvers: float,
+        cooldown_climbing: float = 100.0,
+        route_asphalt: float = 100.0,
+    ):
+        return CyclingRouteCandidateAnalysis(
+            candidate=CyclingRouteCandidate(
+                candidate_id=candidate_id,
+                strategy="ors_round_trip",
+                seed=0,
+                target_distance_m=route.distance_m,
+                route=route,
+            ),
+            best_training_window=common_window,
+            best_by_duration=(),
+            warmup=segment(warmup_maneuvers),
+            cooldown=segment(0.0, cooldown_climbing),
+            route_quality=SimpleNamespace(
+                asphalt_percentage=route_asphalt,
+                suitability_7_plus_percentage=100.0,
+                road_or_cycleway_percentage=100.0,
+                footway_percentage=0.0,
+                unknown_surface_percentage=0.0,
+                maneuver_rate_per_hour=0.0,
+                sharp_turn_count=0,
+                roundabout_count=0,
+            ),
+        )
+
+    cleaner = analyzed("cleaner", warmup_maneuvers=2.0)
+    interrupted = analyzed("interrupted", warmup_maneuvers=8.0)
+    monkeypatch.setattr(
+        routing,
+        "_cross_duration_training_window_rank_key",
+        lambda _analysis: (800.0, 4.0, -10.0, 95.0, 90.0, -8.0),
+    )
+
+    assert rank_cycling_route_candidates((interrupted, cleaner)) == (
+        cleaner,
+        interrupted,
+    )
+
+    easier_cooldown = analyzed(
+        "easier-cooldown",
+        warmup_maneuvers=2.0,
+        cooldown_climbing=50.0,
+    )
+    harder_cooldown = analyzed(
+        "harder-cooldown",
+        warmup_maneuvers=2.0,
+        cooldown_climbing=200.0,
+    )
+    assert rank_cycling_route_candidates(
+        (harder_cooldown, easier_cooldown)
+    ) == (easier_cooldown, harder_cooldown)
+
+    better_route = analyzed(
+        "better-route",
+        warmup_maneuvers=2.0,
+        route_asphalt=95.0,
+    )
+    worse_route = analyzed(
+        "worse-route",
+        warmup_maneuvers=2.0,
+        route_asphalt=80.0,
+    )
+    assert rank_cycling_route_candidates((worse_route, better_route)) == (
+        better_route,
+        worse_route,
+    )
+
+
 async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
