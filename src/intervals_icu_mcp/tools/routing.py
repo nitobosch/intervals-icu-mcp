@@ -2327,3 +2327,57 @@ def find_best_training_windows_by_duration(
             results.append(best)
 
     return tuple(results)
+
+
+@dataclass(frozen=True)
+class RouteTrainingWindowComparisonMetrics:
+    """Duration-normalized metrics for comparing training windows."""
+
+    elevation_gain_rate_m_per_hour: float
+    elevation_loss_rate_m_per_hour: float
+    climbing_balance_rate_m_per_hour: float
+    climbing_balance_gradient_percentage: float
+    maneuvers_per_hour: float
+
+
+def calculate_training_window_comparison_metrics(
+    analysis: RouteTrainingWindowAnalysis,
+) -> RouteTrainingWindowComparisonMetrics:
+    """Calculate duration-neutral metrics for a training window."""
+
+    window = analysis.window
+
+    gain = window.elevation_gain_m
+    loss = window.elevation_loss_m
+
+    if gain is None or loss is None:
+        raise RouteParsingError(
+            "Training window comparison requires elevation gain and loss."
+        )
+
+    if window.duration_s <= 0:
+        raise RouteParsingError(
+            "Training window comparison requires positive duration."
+        )
+
+    if window.distance_m <= 0:
+        raise RouteParsingError(
+            "Training window comparison requires positive distance."
+        )
+
+    duration_hours = window.duration_s / 3600.0
+    climbing_balance_m = gain - loss
+
+    return RouteTrainingWindowComparisonMetrics(
+        elevation_gain_rate_m_per_hour=gain / duration_hours,
+        elevation_loss_rate_m_per_hour=loss / duration_hours,
+        climbing_balance_rate_m_per_hour=(
+            climbing_balance_m / duration_hours
+        ),
+        climbing_balance_gradient_percentage=(
+            climbing_balance_m / window.distance_m * 100.0
+        ),
+        maneuvers_per_hour=(
+            analysis.interruptions.maneuver_count / duration_hours
+        ),
+    )

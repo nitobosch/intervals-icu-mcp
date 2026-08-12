@@ -2225,3 +2225,67 @@ def test_find_best_training_windows_by_duration_empty() -> None:
     )
 
     assert results == ()
+
+
+def test_training_window_comparison_metrics() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        window=SimpleNamespace(
+            elevation_gain_m=500.0,
+            elevation_loss_m=20.0,
+            duration_s=1800.0,
+            distance_m=10000.0,
+        ),
+        interruptions=SimpleNamespace(
+            maneuver_count=3,
+        ),
+    )
+
+    metrics = routing.calculate_training_window_comparison_metrics(
+        analysis,
+    )
+
+    assert metrics.elevation_gain_rate_m_per_hour == pytest.approx(
+        1000.0
+    )
+    assert metrics.elevation_loss_rate_m_per_hour == pytest.approx(
+        40.0
+    )
+    assert metrics.climbing_balance_rate_m_per_hour == pytest.approx(
+        960.0
+    )
+    assert metrics.climbing_balance_gradient_percentage == pytest.approx(
+        4.8
+    )
+    assert metrics.maneuvers_per_hour == pytest.approx(
+        6.0
+    )
+
+
+def test_training_window_comparison_metrics_requires_elevation() -> None:
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    analysis = SimpleNamespace(
+        window=SimpleNamespace(
+            elevation_gain_m=None,
+            elevation_loss_m=None,
+            duration_s=1800.0,
+            distance_m=10000.0,
+        ),
+        interruptions=SimpleNamespace(
+            maneuver_count=0,
+        ),
+    )
+
+    with pytest.raises(
+        routing.RouteParsingError,
+        match="requires elevation gain and loss",
+    ):
+        routing.calculate_training_window_comparison_metrics(
+            analysis,
+        )
