@@ -184,6 +184,43 @@ def _context_overlap_count(
     )
 
 
+def _select_strongly_nearest(
+    candidates: list[GeocodeCandidate],
+) -> GeocodeCandidate | None:
+    """Select by proximity only when one candidate is overwhelmingly nearer."""
+
+    if len(candidates) < 2:
+        return candidates[0] if candidates else None
+
+    if any(candidate.distance_km is None for candidate in candidates):
+        return None
+
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.distance_km
+            if candidate.distance_km is not None
+            else float("inf")
+        ),
+    )
+
+    nearest = ordered[0]
+    second = ordered[1]
+
+    assert nearest.distance_km is not None
+    assert second.distance_km is not None
+
+    distance_gap_km = second.distance_km - nearest.distance_km
+
+    if (
+        distance_gap_km >= 50.0
+        and second.distance_km >= nearest.distance_km * 3.0
+    ):
+        return nearest
+
+    return None
+
+
 def _ambiguous_location_error(
     query: str,
     candidates: list[GeocodeCandidate],
@@ -259,6 +296,14 @@ def select_geocode_candidate(
 
         if len(locality_matches) == 1:
             return locality_matches[0]
+
+        if len(locality_matches) > 1:
+            strongly_nearest = _select_strongly_nearest(
+                locality_matches
+            )
+
+            if strongly_nearest is not None:
+                return strongly_nearest
 
         raise _ambiguous_location_error(
             query,
@@ -1116,3 +1161,41 @@ def parse_cycling_route_response(
         segments=_parse_segments(properties),
         extras=extras,
     )
+
+
+_ROUTING_EXTRA_INFO = (
+    "surface",
+    "waytype",
+    "steepness",
+    "suitability",
+)
+
+
+async def build_cycling_route(
+    client: OpenRouteServiceClient,
+    locations: list[ResolvedLocation],
+) -> CyclingRoute:
+    """Build one road-cycling route through already resolved locations."""
+
+    if len(locations) < 2:
+        raise ValueError(
+            "At least two resolved locations are required to build a route."
+        )
+
+    coordinates = [
+        [
+            location.longitude,
+            location.latitude,
+        ]
+        for location in locations
+    ]
+
+    data = await client.directions(
+        coordinates,
+        profile="cycling-road",
+        elevation=True,
+        instructions=True,
+        extra_info=list(_ROUTING_EXTRA_INFO),
+    )
+
+    return parse_cycling_route_response(data)

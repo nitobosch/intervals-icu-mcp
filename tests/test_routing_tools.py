@@ -10,8 +10,10 @@ from intervals_icu_mcp.tools.routing import (
     CyclingRoute,
     GeocodeCandidate,
     LocationResolutionError,
+    ResolvedLocation,
     RouteCoordinate,
     RouteParsingError,
+    build_cycling_route,
     calculate_elevation_gain_loss,
     extract_geocode_candidates,
     geocode_location_candidates,
@@ -246,6 +248,8 @@ def _candidate(
     layer: str = "venue",
     locality: str | None = None,
     localadmin: str | None = None,
+    region: str = "Balearic Islands",
+    distance_km: float | None = None,
 ) -> GeocodeCandidate:
     return GeocodeCandidate(
         name=name,
@@ -255,8 +259,9 @@ def _candidate(
         layer=layer,
         locality=locality,
         localadmin=localadmin,
-        region="Balearic Islands",
+        region=region,
         country="Spain",
+        distance_km=distance_km,
     )
 
 
@@ -737,3 +742,229 @@ def test_parse_cycling_route_rejects_invalid_response() -> None:
         match="no features",
     ):
         parse_cycling_route_response({})
+
+
+def _resolved_location(
+    label: str,
+    longitude: float,
+    latitude: float,
+) -> ResolvedLocation:
+    return ResolvedLocation(
+        input_value=label,
+        source="geocode",
+        label=label,
+        original_longitude=longitude,
+        original_latitude=latitude,
+        longitude=longitude,
+        latitude=latitude,
+        snapped_distance_m=0.0,
+    )
+
+
+async def test_build_cycling_route_calls_directions_and_parses() -> None:
+    start = _resolved_location(
+        "Start",
+        2.631246,
+        39.590265,
+    )
+    waypoint = _resolved_location(
+        "Waypoint",
+        2.700683,
+        39.694754,
+    )
+
+    directions = AsyncMock(
+        return_value={
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.631246, 39.590265, 61.0],
+                            [2.665000, 39.640000, 120.0],
+                            [2.700683, 39.694754, 216.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": 15850.0,
+                            "duration": 2382.0,
+                            "ascent": 220.0,
+                            "descent": 20.0,
+                        },
+                        "way_points": [0, 2],
+                        "segments": [
+                            {
+                                "distance": 15850.0,
+                                "duration": 2382.0,
+                            }
+                        ],
+                        "extras": {
+                            "surface": {"values": [[0, 2, 3]]},
+                            "waytype": {"values": [[0, 2, 2]]},
+                            "steepness": {"values": [[0, 2, 1]]},
+                            "suitability": {"values": [[0, 2, 8]]},
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.directions = directions  # type: ignore[method-assign]
+
+        route = await build_cycling_route(
+            client,
+            [start, waypoint],
+        )
+
+    assert route.distance_m == pytest.approx(15850.0)
+    assert route.duration_s == pytest.approx(2382.0)
+    assert route.waypoint_indices == (0, 2)
+
+    directions.assert_awaited_once_with(
+        [
+            [2.631246, 39.590265],
+            [2.700683, 39.694754],
+        ],
+        profile="cycling-road",
+        elevation=True,
+        instructions=True,
+        extra_info=[
+            "surface",
+            "waytype",
+            "steepness",
+            "suitability",
+        ],
+    )
+
+
+async def test_build_cycling_route_supports_closed_route() -> None:
+    start = _resolved_location(
+        "Start",
+        2.631246,
+        39.590265,
+    )
+    waypoint = _resolved_location(
+        "Waypoint",
+        2.700683,
+        39.694754,
+    )
+
+    directions = AsyncMock(
+        return_value={
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.631246, 39.590265, 61.0],
+                            [2.700683, 39.694754, 216.0],
+                            [2.631246, 39.590265, 61.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {
+                            "distance": 30000.0,
+                            "duration": 5000.0,
+                        },
+                        "way_points": [0, 1, 2],
+                    },
+                }
+            ]
+        }
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.directions = directions  # type: ignore[method-assign]
+
+        route = await build_cycling_route(
+            client,
+            [start, waypoint, start],
+        )
+
+    assert route.waypoint_indices == (0, 1, 2)
+
+    called_coordinates = directions.await_args.args[0]
+
+    assert called_coordinates[0] == called_coordinates[-1]
+
+
+async def test_build_cycling_route_requires_two_locations() -> None:
+    async with OpenRouteServiceClient(_config()) as client:
+        with pytest.raises(
+            ValueError,
+            match="At least two resolved locations",
+        ):
+            await build_cycling_route(
+                client,
+                [
+                    _resolved_location(
+                        "Start",
+                        2.631246,
+                        39.590265,
+                    )
+                ],
+            )
+
+
+def test_exact_locality_can_use_strong_proximity_tiebreak() -> None:
+    candidates = [
+        _candidate(
+            "Santa Maria del Camí",
+            label="Santa Maria del Camí, PM, Spain",
+            layer="locality",
+            locality="Santa Maria del Camí",
+            localadmin="Santa Maria del Camí",
+            distance_km=13.946,
+        ),
+        _candidate(
+            "Santa Maria del Camí",
+            label="Santa Maria del Camí, PM, Spain",
+            layer="venue",
+            locality="Santa Maria del Camí",
+            localadmin="Santa Maria del Camí",
+            distance_km=14.134,
+        ),
+        _candidate(
+            "Santa María del Camí",
+            label="Santa María del Camí, CT, Spain",
+            layer="locality",
+            localadmin="Veciana",
+            region="Barcelona",
+            distance_km=247.077,
+        ),
+    ]
+
+    selected = select_geocode_candidate(
+        "Santa Maria del Camí, Mallorca",
+        candidates,
+    )
+
+    assert selected.layer == "locality"
+    assert selected.region == "Balearic Islands"
+    assert selected.distance_km == pytest.approx(13.946)
+
+
+def test_proximity_does_not_resolve_close_locality_matches() -> None:
+    candidates = [
+        _candidate(
+            "Example",
+            layer="locality",
+            distance_km=12.0,
+        ),
+        _candidate(
+            "Example",
+            layer="locality",
+            region="Another Region",
+            distance_km=20.0,
+        ),
+    ]
+
+    with pytest.raises(
+        LocationResolutionError,
+        match="ambiguous",
+    ):
+        select_geocode_candidate(
+            "Example",
+            candidates,
+        )
