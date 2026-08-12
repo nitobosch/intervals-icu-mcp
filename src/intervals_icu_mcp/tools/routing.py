@@ -1958,3 +1958,67 @@ def calculate_training_window_extra_distributions(
         )
         for extra_name in _ROUTING_EXTRA_INFO
     }
+
+
+def calculate_training_window_quality_metrics(
+    route: CyclingRoute,
+    window: RouteTrainingWindow,
+) -> RouteQualityMetrics:
+    """Calculate semantic road-cycling quality metrics inside a training window."""
+
+    distributions = calculate_training_window_extra_distributions(
+        route,
+        window,
+    )
+
+    surface = distributions["surface"]
+    waytype = distributions["waytype"]
+    suitability = distributions["suitability"]
+    steepness = distributions["steepness"]
+
+    return RouteQualityMetrics(
+        asphalt_percentage=_percentage_for_extra_values(
+            surface,
+            {3},
+        ),
+        unknown_surface_percentage=_percentage_for_extra_values(
+            surface,
+            {0},
+        ),
+        paving_stones_percentage=_percentage_for_extra_values(
+            surface,
+            {14},
+        ),
+        road_or_cycleway_percentage=_percentage_for_extra_values(
+            waytype,
+            {1, 2, 3, 6},
+        ),
+        footway_percentage=_percentage_for_extra_values(
+            waytype,
+            {7},
+        ),
+        suitability_7_plus_percentage=_percentage_for_extra_values(
+            suitability,
+            {7, 8, 9, 10},
+        ),
+        suitability_8_plus_percentage=_percentage_for_extra_values(
+            suitability,
+            {8, 9, 10},
+        ),
+        incline_7_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {3, 4, 5},
+        ),
+        incline_10_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {4, 5},
+        ),
+        decline_7_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {-3, -4, -5},
+        ),
+        decline_10_plus_percentage=_percentage_for_extra_values(
+            steepness,
+            {-4, -5},
+        ),
+    )

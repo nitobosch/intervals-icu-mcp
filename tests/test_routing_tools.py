@@ -28,6 +28,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_route_timeline,
     calculate_training_window,
     calculate_training_window_extra_distributions,
+    calculate_training_window_quality_metrics,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -1637,3 +1638,54 @@ def test_training_window_extra_distributions_returns_all_extras() -> None:
     for distribution in distributions.values():
         assert distribution.unclassified_distance_m == pytest.approx(0.0)
         assert distribution.values[0].percentage == pytest.approx(100.0)
+
+
+def test_training_window_quality_metrics() -> None:
+    base_route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    route = CyclingRoute(
+        distance_m=base_route.distance_m,
+        duration_s=base_route.duration_s,
+        elevation_gain_m=base_route.elevation_gain_m,
+        elevation_loss_m=base_route.elevation_loss_m,
+        ors_ascent_m=base_route.ors_ascent_m,
+        ors_descent_m=base_route.ors_descent_m,
+        geometry=base_route.geometry,
+        waypoint_indices=base_route.waypoint_indices,
+        segments=base_route.segments,
+        extras={
+            "surface": {"values": [[0, 3, 3]]},
+            "waytype": {"values": [[0, 3, 2]]},
+            "steepness": {"values": [[0, 3, 4]]},
+            "suitability": {"values": [[0, 3, 8]]},
+        },
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    window = calculate_training_window(
+        route,
+        timeline,
+        start_time_s=0.0,
+        duration_s=30.0,
+    )
+
+    metrics = calculate_training_window_quality_metrics(
+        route,
+        window,
+    )
+
+    assert metrics.asphalt_percentage == pytest.approx(100.0)
+    assert metrics.road_or_cycleway_percentage == pytest.approx(100.0)
+    assert metrics.suitability_7_plus_percentage == pytest.approx(100.0)
+    assert metrics.suitability_8_plus_percentage == pytest.approx(100.0)
+    assert metrics.incline_7_plus_percentage == pytest.approx(100.0)
+    assert metrics.incline_10_plus_percentage == pytest.approx(100.0)
+    assert metrics.decline_7_plus_percentage == pytest.approx(0.0)
