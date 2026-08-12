@@ -3375,6 +3375,59 @@ def find_training_block_sequences(
     return tuple(results)
 
 
+def _training_block_sequence_rank_key(
+    sequence: TrainingBlockSequenceAnalysis,
+) -> tuple[Any, ...]:
+    """Return an auditable lexicographic key for repeated block sequences."""
+
+    weakest_work_block_key = min(
+        _training_window_rank_key(analysis)
+        for analysis in sequence.work_blocks
+    )
+    recoveries = tuple(
+        recovery
+        for recovery in sequence.recoveries
+        if recovery is not None
+    )
+    recovery_key = (
+        -max(
+            recovery.comparison.maneuvers_per_hour
+            for recovery in recoveries
+        ),
+        min(
+            recovery.quality.asphalt_percentage
+            for recovery in recoveries
+        ),
+        -max(
+            recovery.quality.footway_percentage
+            for recovery in recoveries
+        ),
+    ) if recoveries else (0.0, 0.0, 0.0)
+
+    return (
+        weakest_work_block_key,
+        -sequence.elevation_gain_rate_range_m_per_hour,
+        sequence.climbing_balance_m,
+        -float(sequence.total_maneuver_count),
+        *recovery_key,
+        -sequence.work_blocks[0].window.start.time_s,
+    )
+
+
+def rank_training_block_sequences(
+    sequences: tuple[TrainingBlockSequenceAnalysis, ...],
+) -> tuple[TrainingBlockSequenceAnalysis, ...]:
+    """Rank repeated block sequences without a weighted aggregate score."""
+
+    return tuple(
+        sorted(
+            sequences,
+            key=_training_block_sequence_rank_key,
+            reverse=True,
+        )
+    )
+
+
 def analyze_route_warmup(
     route: CyclingRoute,
     timeline: RouteTimeline,

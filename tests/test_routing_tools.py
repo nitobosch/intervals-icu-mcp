@@ -27,11 +27,11 @@ from intervals_icu_mcp.tools.routing import (
     RouteSessionSegmentAnalysis,
     RouteTimeline,
     RouteTimelinePoint,
-    TrainingBlockSequenceAnalysis,
-    TrainingBlockSpec,
     RouteTrainingWindow,
     RouteTrainingWindowRequirements,
     RouteWindowInterruptionMetrics,
+    TrainingBlockSequenceAnalysis,
+    TrainingBlockSpec,
     analyze_route_cooldown,
     analyze_route_warmup,
     analyze_training_block_sequence,
@@ -65,6 +65,7 @@ from intervals_icu_mcp.tools.routing import (
     parse_cycling_route_response,
     parse_lat_lon,
     rank_cycling_route_candidates,
+    rank_training_block_sequences,
     resample_route_geometry,
     resolve_coordinate_location,
     resolve_location,
@@ -3120,6 +3121,41 @@ def test_find_training_block_sequences_validates_limit() -> None:
             start_time_max_s=40.0,
             max_sequences=0,
         )
+
+
+def test_rank_training_block_sequences_prioritizes_weakest_block() -> None:
+    route = _route_for_session_segment_tests()
+    timeline = calculate_route_timeline(route)
+    spec = TrainingBlockSpec(
+        work_duration_s=20.0,
+        repetitions=2,
+        recovery_min_s=0.0,
+        recovery_max_s=20.0,
+    )
+    sequences = find_training_block_sequences(
+        route,
+        timeline,
+        spec,
+        start_time_min_s=0.0,
+        start_time_max_s=40.0,
+        step_s=20.0,
+    )
+    assert len(sequences) >= 2
+
+    stronger = sequences[0]
+    weaker_block = replace(
+        stronger.work_blocks[-1],
+        quality=replace(
+            stronger.work_blocks[-1].quality,
+            asphalt_percentage=0.0,
+        ),
+    )
+    weaker = replace(
+        stronger,
+        work_blocks=(*stronger.work_blocks[:-1], weaker_block),
+    )
+
+    assert rank_training_block_sequences((weaker, stronger))[0] is stronger
 
 
 def test_cycling_session_requirements_filter_enabled_segments() -> None:
