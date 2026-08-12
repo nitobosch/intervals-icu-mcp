@@ -2770,6 +2770,59 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
     rank.assert_called_once_with(evaluated)
 
 
+def test_serialize_cycling_route_candidate_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    best = object()
+    other = object()
+    analysis = CyclingRouteCandidateAnalysis(
+        candidate=CyclingRouteCandidate(
+            candidate_id="round-trip-2",
+            strategy="ors_round_trip",
+            seed=7,
+            target_distance_m=2_500.0,
+            route=route,
+        ),
+        best_training_window=best,
+        best_by_duration=(best, other),
+    )
+    serialize_window = Mock(
+        side_effect=lambda _route, window: {"window": id(window)}
+    )
+    monkeypatch.setattr(
+        routing,
+        "_serialize_training_window_analysis",
+        serialize_window,
+    )
+
+    result = routing.serialize_cycling_route_candidate_analysis(analysis)
+
+    assert result["candidate_id"] == "round-trip-2"
+    assert result["generation"] == {
+        "strategy": "ors_round_trip",
+        "seed": 7,
+        "target_distance_meters": 2_500.0,
+        "distance_deviation_meters": -500.0,
+        "distance_deviation_percentage": -20.0,
+    }
+    assert result["route"]["geometry"] == {
+        "type": "LineString",
+        "coordinates": [
+            [2.6, 39.5, 100.0],
+            [2.61, 39.5, 100.0],
+            [2.62, 39.5, 100.0],
+        ],
+    }
+    assert result["best_training_window"] == {"window": id(best)}
+    assert result["best_by_duration"] == [
+        {"window": id(best)},
+        {"window": id(other)},
+    ]
+
+
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:
     import json
     from types import SimpleNamespace

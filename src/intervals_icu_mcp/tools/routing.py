@@ -2780,6 +2780,54 @@ async def find_cycling_training_route_candidates(
     return rank_cycling_route_candidates(analyses)
 
 
+def serialize_cycling_route_candidate_analysis(
+    analysis: CyclingRouteCandidateAnalysis,
+) -> dict[str, Any]:
+    """Serialize one ranked route candidate for an MCP response."""
+
+    candidate = analysis.candidate
+    route = candidate.route
+    distance_deviation_m = route.distance_m - candidate.target_distance_m
+
+    return {
+        "candidate_id": candidate.candidate_id,
+        "generation": {
+            "strategy": candidate.strategy,
+            "seed": candidate.seed,
+            "target_distance_meters": candidate.target_distance_m,
+            "distance_deviation_meters": distance_deviation_m,
+            "distance_deviation_percentage": (
+                distance_deviation_m / candidate.target_distance_m * 100.0
+            ),
+        },
+        "route": {
+            "distance_meters": route.distance_m,
+            "duration_seconds": route.duration_s,
+            "elevation_gain_meters": route.elevation_gain_m,
+            "elevation_loss_meters": route.elevation_loss_m,
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        coordinate.longitude,
+                        coordinate.latitude,
+                        coordinate.elevation_m,
+                    ]
+                    for coordinate in route.geometry
+                ],
+            },
+        },
+        "best_training_window": _serialize_training_window_analysis(
+            route,
+            analysis.best_training_window,
+        ),
+        "best_by_duration": [
+            _serialize_training_window_analysis(route, window_analysis)
+            for window_analysis in analysis.best_by_duration
+        ],
+    }
+
+
 def _serialize_training_window_analysis(
     route: CyclingRoute,
     analysis: RouteTrainingWindowAnalysis,
