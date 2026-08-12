@@ -3144,6 +3144,7 @@ async def find_cycling_training_route_candidates(
     seed_start: int = 0,
     max_distance_deviation_percentage: float | None = 50.0,
     requirements: RouteTrainingWindowRequirements | None = None,
+    session_requirements: CyclingSessionRequirements | None = None,
 ) -> tuple[CyclingRouteCandidateAnalysis, ...]:
     """Generate, evaluate and rank cycling training route candidates."""
 
@@ -3165,6 +3166,7 @@ async def find_cycling_training_route_candidates(
         durations_s=durations_s,
         step_s=step_s,
         requirements=requirements,
+        session_requirements=session_requirements,
     )
 
     return rank_cycling_route_candidates(analyses)
@@ -3645,6 +3647,46 @@ async def find_cycling_training_route(
         float | None,
         "Maximum maneuver rate inside the block.",
     ] = None,
+    max_warmup_elevation_gain_rate_m_per_hour: Annotated[
+        float | None,
+        "Maximum elevation-gain rate during warmup.",
+    ] = None,
+    max_warmup_gradient_percentage: Annotated[
+        float | None,
+        "Maximum net gradient during warmup.",
+    ] = None,
+    max_warmup_maneuvers_per_hour: Annotated[
+        float | None,
+        "Maximum maneuver rate during warmup.",
+    ] = None,
+    min_warmup_asphalt_percentage: Annotated[
+        float | None,
+        "Minimum asphalt percentage during warmup.",
+    ] = None,
+    max_warmup_footway_percentage: Annotated[
+        float | None,
+        "Maximum footway percentage during warmup.",
+    ] = None,
+    max_cooldown_elevation_gain_rate_m_per_hour: Annotated[
+        float | None,
+        "Maximum elevation-gain rate during cooldown.",
+    ] = None,
+    max_cooldown_gradient_percentage: Annotated[
+        float | None,
+        "Maximum net gradient during cooldown.",
+    ] = None,
+    max_cooldown_maneuvers_per_hour: Annotated[
+        float | None,
+        "Maximum maneuver rate during cooldown.",
+    ] = None,
+    min_cooldown_asphalt_percentage: Annotated[
+        float | None,
+        "Minimum asphalt percentage during cooldown.",
+    ] = None,
+    max_cooldown_footway_percentage: Annotated[
+        float | None,
+        "Maximum footway percentage during cooldown.",
+    ] = None,
     ctx: Context | None = None,
 ) -> str:
     """Generate and rank circular road-cycling routes for a training block."""
@@ -3723,6 +3765,48 @@ async def find_cycling_training_route(
                 error_type="validation_error",
             )
 
+    session_requirement_values = (
+        max_warmup_elevation_gain_rate_m_per_hour,
+        max_warmup_gradient_percentage,
+        max_warmup_maneuvers_per_hour,
+        min_warmup_asphalt_percentage,
+        max_warmup_footway_percentage,
+        max_cooldown_elevation_gain_rate_m_per_hour,
+        max_cooldown_gradient_percentage,
+        max_cooldown_maneuvers_per_hour,
+        min_cooldown_asphalt_percentage,
+        max_cooldown_footway_percentage,
+    )
+    session_requirements = (
+        CyclingSessionRequirements(
+            max_warmup_elevation_gain_rate_m_per_hour=(
+                max_warmup_elevation_gain_rate_m_per_hour
+            ),
+            max_warmup_gradient_percentage=max_warmup_gradient_percentage,
+            max_warmup_maneuvers_per_hour=max_warmup_maneuvers_per_hour,
+            min_warmup_asphalt_percentage=min_warmup_asphalt_percentage,
+            max_warmup_footway_percentage=max_warmup_footway_percentage,
+            max_cooldown_elevation_gain_rate_m_per_hour=(
+                max_cooldown_elevation_gain_rate_m_per_hour
+            ),
+            max_cooldown_gradient_percentage=max_cooldown_gradient_percentage,
+            max_cooldown_maneuvers_per_hour=max_cooldown_maneuvers_per_hour,
+            min_cooldown_asphalt_percentage=min_cooldown_asphalt_percentage,
+            max_cooldown_footway_percentage=max_cooldown_footway_percentage,
+        )
+        if any(value is not None for value in session_requirement_values)
+        else None
+    )
+
+    if session_requirements is not None:
+        try:
+            _validate_cycling_session_requirements(session_requirements)
+        except ValueError as exc:
+            return ResponseBuilder.build_error_response(
+                str(exc),
+                error_type="validation_error",
+            )
+
     try:
         async with OpenRouteServiceClient(config) as client:
             origin = await resolve_location(
@@ -3747,6 +3831,7 @@ async def find_cycling_training_route(
                     max_distance_deviation_percentage
                 ),
                 requirements=requirements,
+                session_requirements=session_requirements,
             )
 
         if not ranked:
@@ -3775,6 +3860,11 @@ async def find_cycling_training_route(
                 ),
                 "training_duration_minutes": candidate_durations,
                 "eligibility_requirements": asdict(requirements) if requirements else {},
+                "session_eligibility_requirements": (
+                    asdict(session_requirements)
+                    if session_requirements
+                    else {}
+                ),
             },
             query_type="cycling_training_route",
         )

@@ -3176,6 +3176,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         durations_s=(1200.0, 1800.0),
         step_s=60.0,
         requirements=None,
+        session_requirements=None,
     )
     rank.assert_called_once_with(evaluated)
 
@@ -3918,6 +3919,33 @@ async def test_find_cycling_training_route_validates_before_ors(
     assert "between 2 and 10" in response["error"]["message"]
 
 
+async def test_find_cycling_training_route_validates_session_requirements_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        max_warmup_maneuvers_per_hour=-1.0,
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "rate requirements" in response["error"]["message"]
+
+
 async def test_find_cycling_training_route_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3966,6 +3994,7 @@ async def test_find_cycling_training_route_success(
         target_distance_km=50.0,
         training_durations_minutes=[30.0],
         candidate_count=2,
+        max_warmup_maneuvers_per_hour=8.0,
         ctx=ctx,
     )
 
@@ -3973,7 +4002,25 @@ async def test_find_cycling_training_route_success(
     assert response["data"]["best_route"] == {"candidate": "first"}
     assert response["data"]["alternatives"] == [{"candidate": "second"}]
     assert response["metadata"]["candidate_count_eligible"] == 2
+    assert response["metadata"]["session_eligibility_requirements"] == {
+        "max_warmup_elevation_gain_rate_m_per_hour": None,
+        "max_warmup_gradient_percentage": None,
+        "max_warmup_maneuvers_per_hour": 8.0,
+        "min_warmup_asphalt_percentage": None,
+        "max_warmup_footway_percentage": None,
+        "max_cooldown_elevation_gain_rate_m_per_hour": None,
+        "max_cooldown_gradient_percentage": None,
+        "max_cooldown_maneuvers_per_hour": None,
+        "min_cooldown_asphalt_percentage": None,
+        "max_cooldown_footway_percentage": None,
+    }
     resolve.assert_awaited_once()
     search.assert_awaited_once()
     assert search.await_args.kwargs["target_distance_m"] == 50_000.0
     assert search.await_args.kwargs["durations_s"] == (1800.0,)
+    assert (
+        search.await_args.kwargs[
+            "session_requirements"
+        ].max_warmup_maneuvers_per_hour
+        == 8.0
+    )
