@@ -1225,7 +1225,7 @@ async def generate_cycling_route_candidates(
     *,
     target_distance_m: float,
     candidate_count: int,
-    round_trip_points: int = 5,
+    round_trip_points: int = 2,
     seed_start: int = 0,
 ) -> tuple[CyclingRouteCandidate, ...]:
     """Generate deterministic road-cycling round-trip candidates."""
@@ -2754,7 +2754,7 @@ async def find_cycling_training_route_candidates(
     start_time_max_s: float,
     durations_s: tuple[float, ...],
     step_s: float = 60.0,
-    round_trip_points: int = 5,
+    round_trip_points: int = 2,
     seed_start: int = 0,
     requirements: RouteTrainingWindowRequirements | None = None,
 ) -> tuple[CyclingRouteCandidateAnalysis, ...]:
@@ -3185,7 +3185,7 @@ async def find_cycling_training_route(
     round_trip_points: Annotated[
         int,
         "ORS shaping-point count used to generate each circular route.",
-    ] = 5,
+    ] = 2,
     country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
     focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
     focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,

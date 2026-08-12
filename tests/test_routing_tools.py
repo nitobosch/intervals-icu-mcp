@@ -938,7 +938,7 @@ async def test_generate_cycling_route_candidates_uses_deterministic_seeds() -> N
         assert call.kwargs["options"] == {
             "round_trip": {
                 "length": 50_000.0,
-                "points": 5,
+                "points": 2,
                 "seed": seed,
             }
         }
@@ -2756,7 +2756,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         origin,
         target_distance_m=50_000.0,
         candidate_count=3,
-        round_trip_points=5,
+        round_trip_points=2,
         seed_start=0,
     )
     evaluate.assert_called_once_with(
