@@ -35,6 +35,7 @@ from intervals_icu_mcp.tools.routing import (
     calculate_training_window_quality_metrics,
     evaluate_cycling_route_candidates,
     extract_geocode_candidates,
+    find_cycling_training_route_candidates,
     generate_cycling_route_candidates,
     generate_training_window_candidates,
     geocode_location_candidates,
@@ -2719,6 +2720,54 @@ def test_rank_cycling_route_candidates_uses_distance_tiebreaker(
         exact,
         farther,
     )
+
+
+async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    origin = _resolved_location("Start", 2.63, 39.59)
+    generated = object()
+    evaluated = object()
+    ranked = object()
+    generate = AsyncMock(return_value=generated)
+    evaluate = Mock(return_value=evaluated)
+    rank = Mock(return_value=ranked)
+    monkeypatch.setattr(routing, "generate_cycling_route_candidates", generate)
+    monkeypatch.setattr(routing, "evaluate_cycling_route_candidates", evaluate)
+    monkeypatch.setattr(routing, "rank_cycling_route_candidates", rank)
+
+    async with OpenRouteServiceClient(_config()) as client:
+        result = await find_cycling_training_route_candidates(
+            client,
+            origin,
+            target_distance_m=50_000.0,
+            candidate_count=3,
+            start_time_min_s=1200.0,
+            start_time_max_s=1800.0,
+            durations_s=(1200.0, 1800.0),
+            requirements=None,
+        )
+
+    assert result is ranked
+    generate.assert_awaited_once_with(
+        client,
+        origin,
+        target_distance_m=50_000.0,
+        candidate_count=3,
+        round_trip_points=5,
+        seed_start=0,
+    )
+    evaluate.assert_called_once_with(
+        generated,
+        start_time_min_s=1200.0,
+        start_time_max_s=1800.0,
+        durations_s=(1200.0, 1800.0),
+        step_s=60.0,
+        requirements=None,
+    )
+    rank.assert_called_once_with(evaluated)
 
 
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:

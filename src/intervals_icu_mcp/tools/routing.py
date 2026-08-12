@@ -2744,6 +2744,42 @@ def rank_cycling_route_candidates(
     )
 
 
+async def find_cycling_training_route_candidates(
+    client: OpenRouteServiceClient,
+    origin: ResolvedLocation,
+    *,
+    target_distance_m: float,
+    candidate_count: int,
+    start_time_min_s: float,
+    start_time_max_s: float,
+    durations_s: tuple[float, ...],
+    step_s: float = 60.0,
+    round_trip_points: int = 5,
+    seed_start: int = 0,
+    requirements: RouteTrainingWindowRequirements | None = None,
+) -> tuple[CyclingRouteCandidateAnalysis, ...]:
+    """Generate, evaluate and rank cycling training route candidates."""
+
+    candidates = await generate_cycling_route_candidates(
+        client,
+        origin,
+        target_distance_m=target_distance_m,
+        candidate_count=candidate_count,
+        round_trip_points=round_trip_points,
+        seed_start=seed_start,
+    )
+    analyses = evaluate_cycling_route_candidates(
+        candidates,
+        start_time_min_s=start_time_min_s,
+        start_time_max_s=start_time_max_s,
+        durations_s=durations_s,
+        step_s=step_s,
+        requirements=requirements,
+    )
+
+    return rank_cycling_route_candidates(analyses)
+
+
 def _serialize_training_window_analysis(
     route: CyclingRoute,
     analysis: RouteTrainingWindowAnalysis,
