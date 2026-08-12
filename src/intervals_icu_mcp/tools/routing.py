@@ -2710,6 +2710,40 @@ def evaluate_cycling_route_candidates(
     return tuple(results)
 
 
+def _cycling_route_candidate_rank_key(
+    analysis: CyclingRouteCandidateAnalysis,
+) -> tuple[float, float, float, float, float, float, float, float]:
+    """Return a deterministic route-level ranking key."""
+
+    window_key = _cross_duration_training_window_rank_key(
+        analysis.best_training_window
+    )
+    candidate = analysis.candidate
+    distance_deviation_ratio = abs(
+        candidate.route.distance_m - candidate.target_distance_m
+    ) / candidate.target_distance_m
+
+    return (
+        *window_key,
+        -distance_deviation_ratio,
+        -float(candidate.seed),
+    )
+
+
+def rank_cycling_route_candidates(
+    analyses: tuple[CyclingRouteCandidateAnalysis, ...],
+) -> tuple[CyclingRouteCandidateAnalysis, ...]:
+    """Rank routes by best-window quality, then target-distance fit."""
+
+    return tuple(
+        sorted(
+            analyses,
+            key=_cycling_route_candidate_rank_key,
+            reverse=True,
+        )
+    )
+
+
 def _serialize_training_window_analysis(
     route: CyclingRoute,
     analysis: RouteTrainingWindowAnalysis,

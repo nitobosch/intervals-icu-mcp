@@ -42,6 +42,7 @@ from intervals_icu_mcp.tools.routing import (
     normalize_location_text,
     parse_cycling_route_response,
     parse_lat_lon,
+    rank_cycling_route_candidates,
     resolve_coordinate_location,
     resolve_location,
     resolve_named_location,
@@ -2625,6 +2626,99 @@ def test_evaluate_cycling_route_candidates_reuses_window_engine(
     assert results[0].best_training_window is analysis
     assert results[0].best_by_duration == (analysis,)
     assert timelines == [route, route]
+
+
+def test_rank_cycling_route_candidates_prioritizes_best_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    route = _route_for_extra_tests({})
+    stronger_window = object()
+    closer_window = object()
+    stronger = CyclingRouteCandidateAnalysis(
+        candidate=CyclingRouteCandidate(
+            candidate_id="round-trip-1",
+            strategy="ors_round_trip",
+            seed=0,
+            target_distance_m=10_000.0,
+            route=route,
+        ),
+        best_training_window=stronger_window,
+        best_by_duration=(),
+    )
+    closer = CyclingRouteCandidateAnalysis(
+        candidate=CyclingRouteCandidate(
+            candidate_id="round-trip-2",
+            strategy="ors_round_trip",
+            seed=1,
+            target_distance_m=2_000.0,
+            route=route,
+        ),
+        best_training_window=closer_window,
+        best_by_duration=(),
+    )
+    keys = {
+        id(stronger_window): (900.0, 4.0, -10.0, 95.0, 90.0, -8.0),
+        id(closer_window): (800.0, 4.0, -10.0, 95.0, 90.0, -8.0),
+    }
+    monkeypatch.setattr(
+        routing,
+        "_cross_duration_training_window_rank_key",
+        lambda analysis: keys[id(analysis)],
+    )
+
+    assert rank_cycling_route_candidates((closer, stronger)) == (
+        stronger,
+        closer,
+    )
+
+
+def test_rank_cycling_route_candidates_uses_distance_tiebreaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intervals_icu_mcp.tools.routing as routing
+
+    common_window = object()
+    exact_route = _route_for_extra_tests({})
+    farther_route = CyclingRoute(
+        distance_m=2_500.0,
+        duration_s=exact_route.duration_s,
+        elevation_gain_m=exact_route.elevation_gain_m,
+        elevation_loss_m=exact_route.elevation_loss_m,
+        ors_ascent_m=exact_route.ors_ascent_m,
+        ors_descent_m=exact_route.ors_descent_m,
+        geometry=exact_route.geometry,
+        waypoint_indices=exact_route.waypoint_indices,
+        segments=exact_route.segments,
+        extras=exact_route.extras,
+    )
+
+    def analyzed(candidate_id: str, seed: int, route: CyclingRoute):
+        return CyclingRouteCandidateAnalysis(
+            candidate=CyclingRouteCandidate(
+                candidate_id=candidate_id,
+                strategy="ors_round_trip",
+                seed=seed,
+                target_distance_m=2_000.0,
+                route=route,
+            ),
+            best_training_window=common_window,
+            best_by_duration=(),
+        )
+
+    exact = analyzed("round-trip-1", 0, exact_route)
+    farther = analyzed("round-trip-2", 1, farther_route)
+    monkeypatch.setattr(
+        routing,
+        "_cross_duration_training_window_rank_key",
+        lambda _analysis: (800.0, 4.0, -10.0, 95.0, 90.0, -8.0),
+    )
+
+    assert rank_cycling_route_candidates((farther, exact)) == (
+        exact,
+        farther,
+    )
 
 
 async def test_find_best_cycling_training_window_requires_ors_config() -> None:
