@@ -193,6 +193,32 @@ Ranking is deterministic and lexicographic: training-window quality remains the
 primary criterion, followed by warmup cleanliness, cooldown ease, overall route
 quality, target-distance fit, and seed. There is no weighted aggregate score.
 
+Repeated-block sessions are enabled with `training_repetitions`. The current MVP
+supports one work duration repeated N times, with optional minimum and maximum
+recovery durations. For example, this requests 3 × 12 minutes with 4–6 minute
+recoveries:
+
+```json
+{
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 55,
+  "training_durations_minutes": [12],
+  "training_repetitions": 3,
+  "recovery_min_minutes": 4,
+  "recovery_max_minutes": 6
+}
+```
+
+Every work block must independently satisfy the normal training-window hard
+requirements. The bounded chronological search reuses the existing timeline,
+elevation, quality, interruption, and eligibility engines. Sequence ranking is
+lexicographic and considers the weakest work block first, followed by consistency,
+climbing balance, work interruptions, recovery quality, and start time. The
+response includes each work block and recovery plus total work time, distance,
+elevation, climbing balance, maneuver count, and the range of climbing rates.
+Times are snapped deterministically to route geometry, so summed effective work
+duration can differ slightly from the requested nominal duration.
+
 Optional hard requirements can constrain warmup and cooldown independently:
 
 - maximum elevation-gain rate per hour
@@ -263,8 +289,9 @@ Set `include_gpx=true` to attach a GPX 1.1 export to `best_route`. It is disable
 by default and never added to alternatives, because route geometry already makes
 this response large. The export contains one track segment with latitude,
 longitude, and elevation where available, plus `TRAINING START` and
-`TRAINING END` waypoints for the selected block. No additional ORS request is
-made.
+`TRAINING END` waypoints for a continuous session. Repeated sessions instead use
+`BLOCK 1 START`, `BLOCK 1 END`, and corresponding numbered waypoints for every
+work block. No additional ORS request is made.
 
 The `gpx` object reports `format`, `encoding`, `size_bytes`, and
 `content_base64`. Decode `content_base64` and save the resulting bytes with a
