@@ -16,11 +16,14 @@ from intervals_icu_mcp.tools.routing import (
     RouteExtraValue,
     RouteParsingError,
     RouteQualityMetrics,
+    RouteTimeline,
+    RouteTimelinePoint,
     build_cycling_route,
     calculate_elevation_gain_loss,
     calculate_extra_distribution,
     calculate_route_extra_distributions,
     calculate_route_quality_metrics,
+    calculate_route_timeline,
     extract_geocode_candidates,
     geocode_location_candidates,
     name_token_coverage,
@@ -1209,3 +1212,143 @@ def test_calculate_route_quality_metrics() -> None:
         50.0,
         abs=0.1,
     )
+
+
+def _route_for_timeline_tests(
+    steps: list[dict[str, object]],
+) -> CyclingRoute:
+    return CyclingRoute(
+        distance_m=3000.0,
+        duration_s=sum(
+            float(step.get("duration", 0.0))
+            for step in steps
+        ),
+        elevation_gain_m=30.0,
+        elevation_loss_m=0.0,
+        ors_ascent_m=None,
+        ors_descent_m=None,
+        geometry=(
+            RouteCoordinate(2.600, 39.500, 100.0),
+            RouteCoordinate(2.610, 39.500, 110.0),
+            RouteCoordinate(2.620, 39.500, 120.0),
+            RouteCoordinate(2.630, 39.500, 130.0),
+        ),
+        waypoint_indices=(0, 3),
+        segments=(
+            {
+                "steps": steps,
+            },
+        ),
+        extras={},
+    )
+
+
+def test_calculate_route_timeline_covers_geometry() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 1],
+            },
+            {
+                "duration": 20.0,
+                "way_points": [1, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    assert isinstance(timeline, RouteTimeline)
+    assert len(timeline.points) == len(route.geometry)
+
+    assert timeline.points[0] == RouteTimelinePoint(
+        geometry_index=0,
+        distance_m=0.0,
+        time_s=0.0,
+        elevation_m=100.0,
+    )
+
+    assert timeline.points[1].time_s == pytest.approx(10.0)
+    assert timeline.points[-1].time_s == pytest.approx(30.0)
+    assert timeline.duration_s == pytest.approx(30.0)
+
+
+def test_route_timeline_uses_step_duration() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 5.0,
+                "way_points": [0, 1],
+            },
+            {
+                "duration": 25.0,
+                "way_points": [1, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    assert timeline.points[1].time_s == pytest.approx(5.0)
+    assert timeline.points[-1].time_s == pytest.approx(30.0)
+
+
+def test_route_timeline_interpolates_inside_step() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 30.0,
+                "way_points": [0, 3],
+            },
+        ]
+    )
+
+    timeline = calculate_route_timeline(route)
+
+    assert timeline.points[1].time_s == pytest.approx(
+        10.0,
+        abs=0.1,
+    )
+    assert timeline.points[2].time_s == pytest.approx(
+        20.0,
+        abs=0.1,
+    )
+
+
+def test_route_timeline_rejects_non_contiguous_steps() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 1],
+            },
+            {
+                "duration": 10.0,
+                "way_points": [2, 3],
+            },
+        ]
+    )
+
+    with pytest.raises(
+        RouteParsingError,
+        match="non-contiguous route steps",
+    ):
+        calculate_route_timeline(route)
+
+
+def test_route_timeline_rejects_incomplete_geometry() -> None:
+    route = _route_for_timeline_tests(
+        [
+            {
+                "duration": 10.0,
+                "way_points": [0, 2],
+            },
+        ]
+    )
+
+    with pytest.raises(
+        RouteParsingError,
+        match="do not cover the full geometry",
+    ):
+        calculate_route_timeline(route)

@@ -1485,3 +1485,185 @@ def calculate_route_quality_metrics(
             {-4, -5},
         ),
     )
+
+
+@dataclass(frozen=True)
+class RouteTimelinePoint:
+    """Distance, time and elevation at one route geometry index."""
+
+    geometry_index: int
+    distance_m: float
+    time_s: float
+    elevation_m: float | None
+
+
+@dataclass(frozen=True)
+class RouteTimeline:
+    """Cumulative distance/time mapping across route geometry."""
+
+    points: tuple[RouteTimelinePoint, ...]
+    geometry_distance_m: float
+    duration_s: float
+
+
+def calculate_route_timeline(
+    route: CyclingRoute,
+) -> RouteTimeline:
+    """Build a geometry timeline using ORS step durations."""
+
+    if not route.geometry:
+        raise RouteParsingError(
+            "Cannot build a timeline for an empty route geometry."
+        )
+
+    cumulative_distance = _geometry_cumulative_distances(
+        route.geometry
+    )
+
+    times: list[float | None] = [
+        None
+        for _ in route.geometry
+    ]
+
+    times[0] = 0.0
+
+    elapsed_s = 0.0
+    previous_end: int | None = None
+    usable_steps = 0
+
+    for segment in route.segments:
+        raw_steps = segment.get("steps")
+
+        if not isinstance(raw_steps, list):
+            raise RouteParsingError(
+                "OpenRouteService route segment is missing steps."
+            )
+
+        steps = cast(list[Any], raw_steps)
+
+        for raw_step in steps:
+            if not isinstance(raw_step, dict):
+                raise RouteParsingError(
+                    "OpenRouteService returned an invalid route step."
+                )
+
+            step = cast(dict[str, Any], raw_step)
+
+            raw_way_points = step.get("way_points")
+
+            if not isinstance(raw_way_points, list):
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step waypoints."
+                )
+
+            way_points = cast(list[Any], raw_way_points)
+
+            if len(way_points) < 2:
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step waypoints."
+                )
+
+            start_value = _numeric_value(way_points[0])
+            end_value = _numeric_value(way_points[1])
+            duration_value = _numeric_value(step.get("duration"))
+
+            if (
+                start_value is None
+                or end_value is None
+                or duration_value is None
+                or not start_value.is_integer()
+                or not end_value.is_integer()
+            ):
+                raise RouteParsingError(
+                    "OpenRouteService returned invalid step timing data."
+                )
+
+            start_index = int(start_value)
+            end_index = int(end_value)
+            duration_s = float(duration_value)
+
+            if (
+                start_index < 0
+                or end_index < start_index
+                or end_index >= len(route.geometry)
+                or duration_s < 0
+            ):
+                raise RouteParsingError(
+                    "OpenRouteService returned an out-of-range route step."
+                )
+
+            if previous_end is None:
+                if start_index != 0:
+                    raise RouteParsingError(
+                        "OpenRouteService route steps do not start at geometry index 0."
+                    )
+            elif start_index != previous_end:
+                raise RouteParsingError(
+                    "OpenRouteService returned non-contiguous route steps."
+                )
+
+            if start_index == end_index:
+                previous_end = end_index
+                continue
+
+            start_distance = cumulative_distance[start_index]
+            end_distance = cumulative_distance[end_index]
+            step_geometry_distance = (
+                end_distance - start_distance
+            )
+
+            for geometry_index in range(
+                start_index,
+                end_index + 1,
+            ):
+                if step_geometry_distance > 0:
+                    fraction = (
+                        cumulative_distance[geometry_index]
+                        - start_distance
+                    ) / step_geometry_distance
+                else:
+                    fraction = (
+                        geometry_index - start_index
+                    ) / (
+                        end_index - start_index
+                    )
+
+                times[geometry_index] = (
+                    elapsed_s
+                    + duration_s * fraction
+                )
+
+            elapsed_s += duration_s
+            previous_end = end_index
+            usable_steps += 1
+
+    if usable_steps == 0:
+        raise RouteParsingError(
+            "OpenRouteService route contains no usable steps."
+        )
+
+    if previous_end != len(route.geometry) - 1:
+        raise RouteParsingError(
+            "OpenRouteService route steps do not cover the full geometry."
+        )
+
+    if any(value is None for value in times):
+        raise RouteParsingError(
+            "OpenRouteService route steps left geometry points without timing."
+        )
+
+    points = tuple(
+        RouteTimelinePoint(
+            geometry_index=index,
+            distance_m=cumulative_distance[index],
+            time_s=cast(float, times[index]),
+            elevation_m=coordinate.elevation_m,
+        )
+        for index, coordinate in enumerate(route.geometry)
+    )
+
+    return RouteTimeline(
+        points=points,
+        geometry_distance_m=cumulative_distance[-1],
+        duration_s=elapsed_s,
+    )
