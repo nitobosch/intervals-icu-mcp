@@ -338,6 +338,10 @@ Ranking remains deterministic and considers the weakest block first, followed
 by consistency, climbing balance, interruptions, recovery quality, and start
 time.
 
+The profile explicitly searches candidate work-block starts from minute 20
+through minute 180. The wider horizon is required so the second and third
+repetitions can be represented; it is returned in `data.training_profile`.
+
 The name describes the intended workout structure, not power-zone enforcement:
 routing data does not contain the athlete's executed power. Consequently the
 profile does not invent a power threshold or silently reject roads using
