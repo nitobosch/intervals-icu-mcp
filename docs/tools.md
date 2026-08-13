@@ -232,6 +232,24 @@ separate from ranking. Enabling a requirement for a missing segment makes that
 candidate ineligible. Applied requirements are echoed in
 `metadata.session_eligibility_requirements`.
 
+The optional `avoid_features` list delegates simple geographic restrictions
+directly to OpenRouteService. Cycling routes support `ferries`, `fords`, and
+`steps`; no feature is avoided by default. Values are validated before the ORS
+request and echoed in response metadata. For example:
+
+```json
+{
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 30,
+  "training_durations_minutes": [20],
+  "avoid_features": ["ferries", "fords", "steps"]
+}
+```
+
+Arbitrary avoid-area polygons are not exposed. Supporting them safely would
+require additional GeoJSON topology, area, extent, and route-distance validation;
+the current feature list covers the native low-complexity cycling restrictions.
+
 For example, a client can request a 30 km route with a 20-minute block starting
 10–15 minutes after departure, at most 8 warmup maneuvers per hour, and no more
 than 300 m/h of climbing during cooldown:
