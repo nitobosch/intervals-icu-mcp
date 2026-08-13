@@ -153,7 +153,7 @@ The threaded notes/comments shown under an activity — the user's own training 
 | `icu_duplicate_events`      | Duplicate one or more events with configurable copies and spacing |
 | `icu_apply_training_plan` | Apply an entire training plan (workout folder) onto the calendar |
 
-### Cycling Routing (2 tools)
+### Cycling Routing (3 tools)
 
 Requires `OPENROUTESERVICE_API_KEY`. `OPENROUTESERVICE_BASE_URL` is optional
 and defaults to `https://api.openrouteservice.org`.
@@ -162,6 +162,7 @@ and defaults to `https://api.openrouteservice.org`.
 | --- | --- |
 | `icu_find_best_cycling_training_window` | Build a road-cycling route through ordered place names or coordinates and select the best continuous climbing-oriented training window |
 | `icu_find_cycling_training_route` | Generate deterministic circular road-cycling candidates from one origin, evaluate their best training windows, discard infeasible routes, and return the best route plus eligible alternatives |
+| `icu_find_profiled_cycling_training_route` | Translate a high-level training profile into auditable route-search parameters and delegate to the normal routing engine |
 
 The predefined-route tool compares multiple candidate durations (20/30/40 minutes by default)
 within a configurable start-time range. It returns a compact route summary,
@@ -292,6 +293,32 @@ headwind, because that requires a temporal and directional model along the
 geometry. Civil twilight is also not inferred from arbitrary local thresholds,
 and live traffic or road closures are not claimed without a reliable data
 source. These omissions keep the returned context explicit and auditable.
+
+The high-level profiled tool currently supports `steady_climb`. It is a thin
+translation layer over `icu_find_cycling_training_route`, not a separate
+routing or ranking implementation:
+
+```json
+{
+  "profile": "steady_climb",
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 50,
+  "work_duration_minutes": 35,
+  "departure_time": "2026-08-14T08:00:00+02:00"
+}
+```
+
+`steady_climb` requests one continuous work block. An explicit
+`work_duration_minutes` is forwarded as the sole candidate duration; when it
+is omitted, the existing 20/30/40-minute alternatives are compared. The
+existing deterministic climbing-oriented ranking remains authoritative.
+
+The profile adds no hidden asphalt, gradient, elevation, or interruption
+thresholds. It also does not duplicate route generation, eligibility, ranking,
+weather, GPX, or serialization. The response includes
+`data.training_profile` with the resolved parameters, ranking intent, hard
+constraints applied, and rationale. This makes the high-level translation
+auditable while preserving access to the lower-level tool for advanced callers.
 
 For example, a client can request a 30 km route with a 20-minute block starting
 10–15 minutes after departure, at most 8 warmup maneuvers per hour, and no more
