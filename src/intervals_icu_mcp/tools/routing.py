@@ -1475,6 +1475,21 @@ _ROUTING_EXTRA_INFO = (
     "steepness",
     "suitability",
 )
+_CYCLING_AVOID_FEATURES = frozenset(("ferries", "fords", "steps"))
+
+
+def validate_cycling_avoid_features(
+    avoid_features: tuple[str, ...],
+) -> None:
+    """Validate ORS features that cycling profiles can avoid natively."""
+
+    invalid = sorted(set(avoid_features) - _CYCLING_AVOID_FEATURES)
+    if invalid:
+        raise ValueError(
+            "Unsupported cycling avoid_features: " + ", ".join(invalid)
+        )
+    if len(set(avoid_features)) != len(avoid_features):
+        raise ValueError("avoid_features must not contain duplicates")
 
 
 async def build_cycling_route(
@@ -1517,6 +1532,7 @@ async def generate_cycling_route_candidates(
     seed_start: int = 0,
     max_distance_deviation_percentage: float | None = 50.0,
     target_duration_s: float | None = None,
+    avoid_features: tuple[str, ...] = (),
 ) -> tuple[CyclingRouteCandidate, ...]:
     """Generate deterministic road-cycling round-trip candidates."""
 
@@ -1538,6 +1554,7 @@ async def generate_cycling_route_candidates(
         )
     if target_duration_s is not None and target_duration_s <= 0:
         raise ValueError("target_duration_s must be greater than zero")
+    validate_cycling_avoid_features(avoid_features)
 
     candidates: list[CyclingRouteCandidate] = []
 
@@ -1554,7 +1571,12 @@ async def generate_cycling_route_candidates(
                     "length": target_distance_m,
                     "points": round_trip_points,
                     "seed": seed,
-                }
+                },
+                **(
+                    {"avoid_features": list(avoid_features)}
+                    if avoid_features
+                    else {}
+                ),
             },
         )
         route = parse_cycling_route_response(data)

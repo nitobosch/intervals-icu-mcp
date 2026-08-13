@@ -75,6 +75,7 @@ from intervals_icu_mcp.tools.routing import (
     snap_coordinate,
     split_location_query,
     timeline_point_at_time,
+    validate_cycling_avoid_features,
 )
 
 
@@ -1297,6 +1298,53 @@ async def test_generate_cycling_route_candidates_filters_distance_deviation() ->
 
     assert [candidate.seed for candidate in candidates] == [0]
     assert candidates[0].route.distance_m == 55_000.0
+
+
+async def test_generate_cycling_route_candidates_forwards_avoid_features() -> None:
+    origin = _resolved_location("Start", 2.63, 39.59)
+    directions = AsyncMock(
+        return_value={
+            "features": [
+                {
+                    "geometry": {
+                        "coordinates": [
+                            [2.63, 39.59, 100.0],
+                            [2.64, 39.60, 110.0],
+                        ]
+                    },
+                    "properties": {
+                        "summary": {"distance": 10_000.0, "duration": 1_000.0}
+                    },
+                }
+            ]
+        }
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.directions = directions  # type: ignore[method-assign]
+        await generate_cycling_route_candidates(
+            client,
+            origin,
+            target_distance_m=10_000.0,
+            candidate_count=1,
+            avoid_features=("ferries", "steps"),
+        )
+
+    assert directions.await_args.kwargs["options"] == {
+        "round_trip": {"length": 10_000.0, "points": 2, "seed": 0},
+        "avoid_features": ["ferries", "steps"],
+    }
+
+
+@pytest.mark.parametrize(
+    "avoid_features",
+    [("highways",), ("steps", "steps")],
+)
+def test_validate_cycling_avoid_features_rejects_invalid_values(
+    avoid_features: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError):
+        validate_cycling_avoid_features(avoid_features)
 
 
 async def test_generate_cycling_route_candidates_validates_inputs() -> None:
