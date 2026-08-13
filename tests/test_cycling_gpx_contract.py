@@ -9,6 +9,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp.types import BlobResourceContents, EmbeddedResource, TextContent
 
 from intervals_icu_mcp.auth import ICUConfig
 from intervals_icu_mcp.tools import routing
@@ -97,7 +98,7 @@ async def _export_response(
     *,
     training_window: RouteTrainingWindow,
     training_block_sequence: Any = None,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], EmbeddedResource]:
     origin = routing.ResolvedLocation(
         input_value="Start",
         source="coordinates",
@@ -176,12 +177,18 @@ async def _export_response(
         include_gpx=True,
         ctx=context,  # type: ignore[arg-type]
     )
-    return json.loads(raw_response)
+    assert isinstance(raw_response, list)
+    text_blocks = [block for block in raw_response if isinstance(block, TextContent)]
+    resources = [block for block in raw_response if isinstance(block, EmbeddedResource)]
+    assert len(text_blocks) == 1
+    assert len(resources) == 1
+    return json.loads(text_blocks[0].text), resources[0]
 
 
 def _assert_navigation_track_contract(
     response: dict[str, object],
     route: CyclingRoute,
+    resource: EmbeddedResource,
 ) -> tuple[ET.Element, list[ET.Element]]:
     data = response["data"]
     assert isinstance(data, dict)
@@ -193,6 +200,12 @@ def _assert_navigation_track_contract(
     assert isinstance(encoded, str)
     content = base64.b64decode(encoded, validate=True)
     assert len(content) == gpx["size_bytes"]
+    assert isinstance(resource.resource, BlobResourceContents)
+    assert resource.resource.mimeType == "application/gpx+xml"
+    assert str(resource.resource.uri) == ("file:///cycling-training-route-round-trip-1.gpx")
+    delivered = base64.b64decode(resource.resource.blob, validate=True)
+    assert delivered == content
+    assert len(delivered) == gpx["size_bytes"]
 
     root = ET.fromstring(content)
     tracks = root.findall("gpx:trk", _GPX_NAMESPACE)
@@ -230,12 +243,12 @@ async def test_continuous_route_gpx_response_preserves_navigation_track(
     route = _route()
     training_window = _window(route, 2, 7)
 
-    response = await _export_response(
+    response, resource = await _export_response(
         monkeypatch,
         route,
         training_window=training_window,
     )
-    root, track_points = _assert_navigation_track_contract(response, route)
+    root, track_points = _assert_navigation_track_contract(response, route, resource)
     waypoints = root.findall("gpx:wpt", _GPX_NAMESPACE)
 
     assert [waypoint.findtext("gpx:name", namespaces=_GPX_NAMESPACE) for waypoint in waypoints] == [
@@ -255,13 +268,13 @@ async def test_multiblock_route_gpx_response_preserves_navigation_track(
         work_blocks=tuple(SimpleNamespace(window=window) for window in windows)
     )
 
-    response = await _export_response(
+    response, resource = await _export_response(
         monkeypatch,
         route,
         training_window=windows[0],
         training_block_sequence=sequence,
     )
-    root, track_points = _assert_navigation_track_contract(response, route)
+    root, track_points = _assert_navigation_track_contract(response, route, resource)
     waypoints = root.findall("gpx:wpt", _GPX_NAMESPACE)
 
     assert [waypoint.findtext("gpx:name", namespaces=_GPX_NAMESPACE) for waypoint in waypoints] == [

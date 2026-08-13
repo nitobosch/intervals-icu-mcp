@@ -5076,7 +5076,11 @@ async def test_find_cycling_training_route_success(
         ctx=ctx,
     )
 
-    response = json.loads(result)
+    from intervals_icu_mcp.gpx_delivery import response_text_and_resources
+
+    response_text, resources = response_text_and_resources(result)
+    response = json.loads(response_text)
+    assert len(resources) == 1
     assert response["data"]["best_route"] == {
         "candidate": "first",
         "gpx": {

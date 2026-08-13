@@ -10,6 +10,11 @@ from fastmcp import Context
 
 from ..cycling_coach import plan_cycling_coach_session
 from ..cycling_profiles import CyclingTrainingProfileName
+from ..gpx_delivery import (
+    CyclingToolResponse,
+    rebuild_response,
+    response_text_and_resources,
+)
 from ..response_builder import ResponseBuilder
 from .cycling_profiles import find_profiled_cycling_training_route
 
@@ -56,7 +61,7 @@ async def find_cycling_coach_route(
         "Native ORS cycling features to avoid.",
     ] = None,
     ctx: Context | None = None,
-) -> str:
+) -> CyclingToolResponse:
     """Plan an explicit session and execute it through profiled routing."""
 
     try:
@@ -89,11 +94,15 @@ async def find_cycling_coach_route(
         avoid_features=avoid_features,
         ctx=ctx,
     )
-    response = json.loads(raw_response)
+    response_text, resources = response_text_and_resources(raw_response)
+    response = json.loads(response_text)
     if not isinstance(response, dict):
         return raw_response
     typed_response = cast(dict[str, Any], response)
     data = typed_response.get("data")
     if isinstance(data, dict):
         cast(dict[str, Any], data)["coach_plan"] = asdict(plan)
-    return json.dumps(typed_response, ensure_ascii=False, default=str)
+    return rebuild_response(
+        json.dumps(typed_response, ensure_ascii=False, default=str),
+        resources,
+    )

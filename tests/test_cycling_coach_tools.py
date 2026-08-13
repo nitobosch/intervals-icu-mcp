@@ -6,6 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from intervals_icu_mcp.gpx_delivery import (
+    attach_gpx_resource,
+    response_text_and_resources,
+)
 from intervals_icu_mcp.tools import cycling_coach
 
 
@@ -33,7 +37,7 @@ async def test_coach_delegates_the_auditable_plan(
         ctx=ctx,  # type: ignore[arg-type]
     )
 
-    response = json.loads(result)
+    response = json.loads(response_text_and_resources(result)[0])
     plan = response["data"]["coach_plan"]
     assert plan["start_location"] == "Son Moix"
     assert plan["target_duration_minutes"] == 135.0
@@ -73,9 +77,10 @@ async def test_coach_preserves_explicit_shorter_route_target(
         ctx=SimpleNamespace(),  # type: ignore[arg-type]
     )
 
-    plan = json.loads(result)["data"]["coach_plan"]
+    plan = json.loads(response_text_and_resources(result)[0])["data"]["coach_plan"]
     assert plan["target_duration_minutes"] == 120.0
     assert plan["duration_source"] == "explicit_target"
+    assert route_tool.await_args is not None
     assert route_tool.await_args.kwargs["include_gpx"] is False
 
 
@@ -98,7 +103,39 @@ async def test_coach_validates_before_route_calls(
         ctx=None,
     )
 
-    response = json.loads(result)
+    response = json.loads(response_text_and_resources(result)[0])
     assert response["error"]["type"] == "validation_error"
     assert "must not exceed" in response["error"]["message"]
     route_tool.assert_not_awaited()
+
+
+async def test_coach_preserves_native_gpx_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"<?xml version='1.0'?><gpx><trk><trkseg/></trk></gpx>"
+    delegated = attach_gpx_resource(
+        '{"data":{"best_route":{"candidate_id":"round-trip-1"}}}',
+        content=content,
+        filename="cycling-training-route-round-trip-1.gpx",
+    )
+    monkeypatch.setattr(
+        cycling_coach,
+        "find_profiled_cycling_training_route",
+        AsyncMock(return_value=delegated),
+    )
+
+    result = await cycling_coach.find_cycling_coach_route(
+        profile="steady_climb",
+        start_location="Start",
+        target_distance_km=50.0,
+        available_time_minutes=120.0,
+        ctx=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+
+    response_text, resources = response_text_and_resources(result)
+    response = json.loads(response_text)
+    assert response["data"]["coach_plan"]["profile"]["profile"] == (
+        "steady_climb"
+    )
+    assert len(resources) == 1
+    assert resources[0] is delegated[1]

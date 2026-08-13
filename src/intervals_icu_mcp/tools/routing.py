@@ -17,6 +17,7 @@ from ..cycling_forecast import (
     build_cycling_forecast_context,
     parse_aware_datetime,
 )
+from ..gpx_delivery import CyclingToolResponse, attach_gpx_resource
 from ..open_meteo_client import OpenMeteoAPIError, OpenMeteoClient
 from ..openrouteservice_client import (
     OpenRouteServiceAPIError,
@@ -4488,7 +4489,7 @@ async def find_cycling_training_route(
         "Maximum footway percentage during cooldown.",
     ] = None,
     ctx: Context | None = None,
-) -> str:
+) -> CyclingToolResponse:
     """Generate and rank circular road-cycling routes for a training block."""
 
     assert ctx is not None
@@ -4764,6 +4765,7 @@ async def find_cycling_training_route(
                     "warnings": ["forecast_unavailable"],
                     "error": str(exc),
                 }
+        gpx_content: bytes | None = None
         if include_gpx:
             best_analysis = ranked[0]
             block_sequence = best_analysis.best_training_block_sequence
@@ -4786,7 +4788,7 @@ async def find_cycling_training_route(
                 "size_bytes": len(gpx_content),
                 "content_base64": base64.b64encode(gpx_content).decode("ascii"),
             }
-        return ResponseBuilder.build_response(
+        response = ResponseBuilder.build_response(
             data={
                 "origin": asdict(origin),
                 "best_route": serialized[0],
@@ -4840,6 +4842,17 @@ async def find_cycling_training_route(
             },
             query_type="cycling_training_route",
         )
+        if include_gpx:
+            assert gpx_content is not None
+            best_candidate_id = ranked[0].candidate.candidate_id
+            return attach_gpx_resource(
+                response,
+                content=gpx_content,
+                filename=(
+                    f"cycling-training-route-{best_candidate_id}.gpx"
+                ),
+            )
+        return response
     except LocationResolutionError as exc:
         return ResponseBuilder.build_error_response(str(exc), error_type="location_resolution_error")
     except (ValueError, RouteParsingError) as exc:

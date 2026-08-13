@@ -12,6 +12,11 @@ from ..cycling_profiles import (
     CyclingTrainingProfileName,
     resolve_cycling_training_profile,
 )
+from ..gpx_delivery import (
+    CyclingToolResponse,
+    rebuild_response,
+    response_text_and_resources,
+)
 from ..response_builder import ResponseBuilder
 from .routing import find_cycling_training_route
 
@@ -54,7 +59,7 @@ async def find_profiled_cycling_training_route(
         "Native ORS cycling features to avoid.",
     ] = None,
     ctx: Context | None = None,
-) -> str:
+) -> CyclingToolResponse:
     """Resolve a training profile and delegate to the routing engine."""
 
     assert ctx is not None
@@ -91,11 +96,15 @@ async def find_profiled_cycling_training_route(
         departure_time=departure_time,
         ctx=ctx,
     )
-    response = json.loads(raw_response)
+    response_text, resources = response_text_and_resources(raw_response)
+    response = json.loads(response_text)
     if not isinstance(response, dict):
         return raw_response
     typed_response = cast(dict[str, Any], response)
     data = typed_response.get("data")
     if isinstance(data, dict):
         cast(dict[str, Any], data)["training_profile"] = asdict(resolution)
-    return json.dumps(typed_response, ensure_ascii=False, default=str)
+    return rebuild_response(
+        json.dumps(typed_response, ensure_ascii=False, default=str),
+        resources,
+    )
