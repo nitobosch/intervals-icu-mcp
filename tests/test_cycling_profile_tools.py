@@ -129,3 +129,31 @@ async def test_profiled_route_preserves_routing_errors(
         ctx=SimpleNamespace(),  # type: ignore[arg-type]
     )
     assert json.loads(result)["error"]["type"] == "not_found"
+
+
+async def test_sweet_spot_profile_delegates_multiblock_structure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_tool = AsyncMock(return_value='{"data": {}}')
+    monkeypatch.setattr(
+        cycling_profiles,
+        "find_cycling_training_route",
+        route_tool,
+    )
+
+    result = await cycling_profiles.find_profiled_cycling_training_route(
+        profile="sweet_spot_climb",
+        start_location="Start",
+        target_distance_km=60.0,
+        work_duration_minutes=15.0,
+        ctx=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+
+    kwargs = route_tool.await_args.kwargs
+    assert kwargs["training_durations_minutes"] == [15.0]
+    assert kwargs["training_repetitions"] == 3
+    assert kwargs["recovery_min_minutes"] == 5.0
+    assert kwargs["recovery_max_minutes"] == 8.0
+    profile = json.loads(result)["data"]["training_profile"]
+    assert profile["profile"] == "sweet_spot_climb"
+    assert profile["hard_constraints_applied"] == []
