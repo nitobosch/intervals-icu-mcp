@@ -54,6 +54,7 @@ from intervals_icu_mcp.tools.routing import (
     deduplicate_cycling_route_candidates,
     evaluate_cycling_route_candidates,
     extract_geocode_candidates,
+    extract_requested_house_number,
     filter_cycling_route_candidates_by_duration,
     find_cycling_training_route_candidates,
     find_training_block_sequences,
@@ -121,6 +122,9 @@ def test_extract_geocode_candidates_filters_invalid_features() -> None:
                         "layer": "venue",
                         "locality": "Palma",
                         "country": "Spain",
+                        "street": "Carrer de Blanquerna",
+                        "housenumber": "44",
+                        "confidence": 0.95,
                     },
                     "geometry": {
                         "coordinates": [2.630108, 39.589985],
@@ -146,6 +150,33 @@ def test_extract_geocode_candidates_filters_invalid_features() -> None:
     assert candidate.layer == "venue"
     assert candidate.locality == "Palma"
     assert candidate.country == "Spain"
+    assert candidate.street == "Carrer de Blanquerna"
+    assert candidate.house_number == "44"
+    assert candidate.confidence == pytest.approx(0.95)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Carrer de Blanquerna, 44, Palma", "44"),
+        ("Carrer de Blanquerna 44, Palma", "44"),
+        ("Carrer de Blanquerna 44", "44"),
+        ("Carrer de Blanquerna, Palma", None),
+        ("Ma-10", None),
+        ("PM-1", None),
+        ("Carretera Ma-10", None),
+        ("Road MA-10", None),
+        ("Carretera Ma-10, 14, Escorca", None),
+        ("Carretera de Soller km 14", None),
+        ("Carretera de Soller, km 14", None),
+        ("Coll d'Honor", None),
+    ],
+)
+def test_extract_requested_house_number_is_conservative(
+    value: str,
+    expected: str | None,
+) -> None:
+    assert extract_requested_house_number(value) == expected
 
 
 async def test_geocode_candidates_do_not_select_silently() -> None:
@@ -473,6 +504,198 @@ def test_admin_context_disambiguates_orient() -> None:
     )
 
     assert selected.localadmin == "Bunyola"
+
+
+def _geocode_feature(
+    *,
+    name: str,
+    label: str,
+    layer: str,
+    street: str | None = None,
+    house_number: str | None = None,
+) -> dict[str, object]:
+    properties: dict[str, object] = {
+        "name": name,
+        "label": label,
+        "layer": layer,
+        "locality": "Palma",
+        "localadmin": "Palma",
+        "region": "Balearic Islands",
+        "country": "Spain",
+    }
+
+    if street is not None:
+        properties["street"] = street
+
+    if house_number is not None:
+        properties["housenumber"] = house_number
+
+    return {
+        "properties": properties,
+        "geometry": {"coordinates": [2.649397, 39.581232]},
+    }
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Carrer de Blanquerna, 44, Palma",
+        "Carrer de Blanquerna 44, Palma",
+        "Carrer de Blanquerna 44",
+    ],
+)
+async def test_numbered_address_requires_and_accepts_exact_house_number(
+    query: str,
+) -> None:
+    geocode = AsyncMock(
+        return_value={
+            "features": [
+                _geocode_feature(
+                    name="Carrer de Blanquerna 44",
+                    label="Carrer de Blanquerna 44, Palma, PM, Spain",
+                    layer="address",
+                    street="Carrer de Blanquerna",
+                    house_number="44",
+                )
+            ]
+        }
+    )
+    snap = AsyncMock(
+        return_value={
+            "locations": [
+                {
+                    "location": [2.6494, 39.58123],
+                    "snapped_distance": 0.4,
+                }
+            ]
+        }
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.geocode = geocode  # type: ignore[method-assign]
+        client.snap = snap  # type: ignore[method-assign]
+
+        result = await resolve_named_location(client, query)
+
+    assert result.label == "Carrer de Blanquerna 44, Palma, PM, Spain"
+    assert result.original_longitude == pytest.approx(2.649397)
+    assert result.original_latitude == pytest.approx(39.581232)
+    snap.assert_awaited_once_with(
+        [[2.649397, 39.581232]],
+        profile="cycling-road",
+        radius=350.0,
+    )
+
+
+async def test_numbered_address_rejects_generic_street_without_snapping() -> None:
+    geocode = AsyncMock(
+        return_value={
+            "features": [
+                _geocode_feature(
+                    name="carrer de Saridakis",
+                    label="carrer de Saridakis, Palma, PM, Spain",
+                    layer="street",
+                    street="carrer de Saridakis",
+                )
+            ]
+        }
+    )
+    snap = AsyncMock()
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.geocode = geocode  # type: ignore[method-assign]
+        client.snap = snap  # type: ignore[method-assign]
+
+        with pytest.raises(
+            LocationResolutionError,
+            match="house number '44'",
+        ):
+            await resolve_named_location(
+                client,
+                "Carrer de Saridakis, 44, Palma",
+            )
+
+    snap.assert_not_awaited()
+
+
+async def test_numbered_address_rejects_different_house_number() -> None:
+    geocode = AsyncMock(
+        return_value={
+            "features": [
+                _geocode_feature(
+                    name="Carrer de Blanquerna 42",
+                    label="Carrer de Blanquerna 42, Palma, PM, Spain",
+                    layer="address",
+                    street="Carrer de Blanquerna",
+                    house_number="42",
+                )
+            ]
+        }
+    )
+    snap = AsyncMock()
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.geocode = geocode  # type: ignore[method-assign]
+        client.snap = snap  # type: ignore[method-assign]
+
+        with pytest.raises(
+            LocationResolutionError,
+            match="house number '44'",
+        ):
+            await resolve_named_location(
+                client,
+                "Carrer de Blanquerna, 44, Palma",
+            )
+
+    snap.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("query", "feature"),
+    [
+        (
+            "Carrer de Blanquerna, Palma",
+            _geocode_feature(
+                name="Carrer de Blanquerna",
+                label="Carrer de Blanquerna, Palma, PM, Spain",
+                layer="street",
+                street="Carrer de Blanquerna",
+            ),
+        ),
+        (
+            "Coll d'Honor, Bunyola",
+            _geocode_feature(
+                name="Coll d'Honor",
+                label="Coll d'Honor, Bunyola, PM, Spain",
+                layer="venue",
+            ),
+        ),
+    ],
+)
+async def test_non_address_locations_keep_existing_resolution(
+    query: str,
+    feature: dict[str, object],
+) -> None:
+    geocode = AsyncMock(return_value={"features": [feature]})
+    snap = AsyncMock(
+        return_value={
+            "locations": [
+                {
+                    "location": [2.6494, 39.58123],
+                    "snapped_distance": 0.4,
+                }
+            ]
+        }
+    )
+
+    async with OpenRouteServiceClient(_config()) as client:
+        client.geocode = geocode  # type: ignore[method-assign]
+        client.snap = snap  # type: ignore[method-assign]
+
+        result = await resolve_named_location(client, query)
+
+    assert result.source == "geocode"
+    snap.assert_awaited_once()
 
 
 async def test_resolve_named_location_geocodes_selects_and_snaps() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
@@ -44,6 +45,9 @@ class GeocodeCandidate:
     region: str | None = None
     country: str | None = None
     distance_km: float | None = None
+    street: str | None = None
+    house_number: str | None = None
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,77 @@ def split_location_query(value: str) -> tuple[str, tuple[str, ...]]:
         return "", ()
 
     return parts[0], parts[1:]
+
+
+_STREET_DESIGNATORS = frozenset(
+    {
+        "avenida",
+        "avinguda",
+        "calle",
+        "cami",
+        "camino",
+        "carrer",
+        "carretera",
+        "paseo",
+        "passeig",
+        "placa",
+        "plaza",
+        "rambla",
+        "road",
+        "street",
+        "travesia",
+        "via",
+    }
+)
+_HOUSE_NUMBER_PATTERN = re.compile(r"\d+[a-zA-Z]?")
+_ROAD_CODE_AT_END_PATTERN = re.compile(
+    r"(?:^|\s)[a-zA-Z]{1,4}-\d+[a-zA-Z]?$",
+    re.IGNORECASE,
+)
+_KILOMETRE_AT_END_PATTERN = re.compile(
+    r"(?:^|\s)(?:km|kilometro|kilometre)\.?\s*\d+(?:[.,]\d+)?$",
+    re.IGNORECASE,
+)
+
+
+def extract_requested_house_number(value: str) -> str | None:
+    """Return an explicit house number without confusing road identifiers."""
+
+    primary_name, context_parts = split_location_query(value)
+    normalized_primary = normalize_location_text(primary_name)
+    primary_tokens = set(normalized_primary.split())
+
+    if not primary_tokens & _STREET_DESIGNATORS:
+        return None
+
+    if _KILOMETRE_AT_END_PATTERN.search(primary_name):
+        return None
+
+    trailing_match = re.search(
+        r"(?:^|\s)(\d+[a-zA-Z]?)$",
+        primary_name,
+    )
+
+    if trailing_match is not None:
+        street_part = primary_name[: trailing_match.start(1)].strip()
+
+        if _ROAD_CODE_AT_END_PATTERN.search(street_part):
+            return None
+
+        return trailing_match.group(1)
+
+    if not context_parts:
+        return None
+
+    possible_number = context_parts[0].strip()
+
+    if not _HOUSE_NUMBER_PATTERN.fullmatch(possible_number):
+        return None
+
+    if _ROAD_CODE_AT_END_PATTERN.search(primary_name):
+        return None
+
+    return possible_number
 
 
 def name_token_coverage(
@@ -483,6 +558,17 @@ def extract_geocode_candidates(
         except (TypeError, ValueError):
             distance_km = None
 
+        raw_confidence = properties.get("confidence")
+
+        try:
+            confidence = (
+                float(raw_confidence)
+                if raw_confidence is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            confidence = None
+
         candidates.append(
             GeocodeCandidate(
                 name=name,
@@ -495,6 +581,9 @@ def extract_geocode_candidates(
                 region=_optional_string(properties.get("region")),
                 country=_optional_string(properties.get("country")),
                 distance_km=distance_km,
+                street=_optional_string(properties.get("street")),
+                house_number=_optional_string(properties.get("housenumber")),
+                confidence=confidence,
             )
         )
 
@@ -652,6 +741,25 @@ async def resolve_named_location(
         focus_lon=focus_lon,
         focus_lat=focus_lat,
     )
+
+    requested_house_number = extract_requested_house_number(query)
+
+    if requested_house_number is not None:
+        matching_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.house_number is not None
+            and candidate.house_number.casefold()
+            == requested_house_number.casefold()
+        ]
+
+        if not matching_candidates:
+            raise LocationResolutionError(
+                f"Could not resolve house number '{requested_house_number}' "
+                f"for '{query}'. The geocoder did not return that exact address."
+            )
+
+        candidates = matching_candidates
 
     selected = select_geocode_candidate(
         query,
