@@ -19,7 +19,7 @@ from .routing import find_cycling_training_route
 async def find_profiled_cycling_training_route(
     profile: Annotated[
         CyclingTrainingProfileName,
-        "High-level training objective; currently supports steady_climb.",
+        "Training objective: steady_climb or sweet_spot_climb.",
     ],
     start_location: Annotated[
         str,
@@ -31,7 +31,7 @@ async def find_profiled_cycling_training_route(
     ],
     work_duration_minutes: Annotated[
         float | None,
-        "Optional continuous work duration; profile defaults apply when omitted.",
+        "Optional duration of each work block; profile defaults apply if omitted.",
     ] = None,
     target_duration_minutes: Annotated[
         float | None,

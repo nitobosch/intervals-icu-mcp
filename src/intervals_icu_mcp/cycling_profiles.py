@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-CyclingTrainingProfileName = Literal["steady_climb"]
+CyclingTrainingProfileName = Literal[
+    "steady_climb",
+    "sweet_spot_climb",
+]
 
 
 @dataclass(frozen=True)
@@ -34,10 +37,47 @@ def resolve_cycling_training_profile(
 ) -> CyclingTrainingProfileResolution:
     """Resolve a supported profile without calling routing or external APIs."""
 
-    if profile != "steady_climb":
+    if profile not in ("steady_climb", "sweet_spot_climb"):
         raise ValueError(f"unsupported cycling training profile: {profile}")
     if work_duration_minutes is not None and work_duration_minutes <= 0:
         raise ValueError("work_duration_minutes must be greater than zero")
+
+    if profile == "sweet_spot_climb":
+        work_duration = (
+            work_duration_minutes
+            if work_duration_minutes is not None
+            else 12.0
+        )
+        duration_rationale = (
+            "Uses the explicitly requested duration for each work block."
+            if work_duration_minutes is not None
+            else "Uses the profile default of three 12 minute work blocks."
+        )
+        return CyclingTrainingProfileResolution(
+            profile="sweet_spot_climb",
+            objective=(
+                "Find three sustained climbing work blocks with bounded "
+                "recoveries inside a complete road-cycling route."
+            ),
+            training_durations_minutes=(work_duration,),
+            training_repetitions=3,
+            recovery_min_minutes=5.0,
+            recovery_max_minutes=8.0,
+            ranking_intent=(
+                "Use the existing deterministic multi-block ranking, which "
+                "considers the weakest work block first, then consistency, "
+                "climbing balance, interruptions and recovery quality."
+            ),
+            hard_constraints_applied=(),
+            rationale=(
+                duration_rationale,
+                "Uses three repetitions with explicit 5 to 8 minute recoveries.",
+                (
+                    "Adds no hidden surface, gradient, elevation, power-zone "
+                    "or interruption thresholds."
+                ),
+            ),
+        )
 
     durations = (
         (work_duration_minutes,)
