@@ -13,6 +13,8 @@ def test_steady_climb_uses_auditable_defaults_without_hard_constraints() -> None
     assert resolution.profile == "steady_climb"
     assert resolution.training_durations_minutes == (20.0, 30.0, 40.0)
     assert resolution.training_repetitions == 1
+    assert resolution.training_start_time_min_minutes == 20.0
+    assert resolution.training_start_time_max_minutes == 30.0
     assert resolution.recovery_min_minutes is None
     assert resolution.recovery_max_minutes is None
     assert resolution.hard_constraints_applied == ()
@@ -54,11 +56,17 @@ def test_sweet_spot_climb_resolves_auditable_multiblock_defaults() -> None:
     assert resolution.training_repetitions == 3
     assert resolution.recovery_min_minutes == 5.0
     assert resolution.recovery_max_minutes == 8.0
+    assert resolution.training_start_time_min_minutes == 20.0
+    assert resolution.training_start_time_max_minutes == 180.0
     assert resolution.hard_constraints_applied == ()
     assert "weakest work block first" in resolution.ranking_intent
     assert resolution.rationale == (
         "Uses the profile default of three 12 minute work blocks.",
         "Uses three repetitions with explicit 5 to 8 minute recoveries.",
+        (
+            "Searches work-block starts from minute 20 through minute "
+            "180 so later repetitions are representable."
+        ),
         (
             "Adds no hidden surface, gradient, elevation, power-zone "
             "or interruption thresholds."

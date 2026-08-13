@@ -22,6 +22,8 @@ class CyclingTrainingProfileResolution:
     profile: CyclingTrainingProfileName
     objective: str
     training_durations_minutes: tuple[float, ...]
+    training_start_time_min_minutes: float
+    training_start_time_max_minutes: float
     training_repetitions: int
     recovery_min_minutes: float | None
     recovery_max_minutes: float | None
@@ -63,6 +65,8 @@ def resolve_cycling_training_profile(
             training_repetitions=3,
             recovery_min_minutes=5.0,
             recovery_max_minutes=8.0,
+            training_start_time_min_minutes=20.0,
+            training_start_time_max_minutes=180.0,
             ranking_intent=(
                 "Use the existing deterministic multi-block ranking, which "
                 "considers the weakest work block first, then consistency, "
@@ -72,6 +76,10 @@ def resolve_cycling_training_profile(
             rationale=(
                 duration_rationale,
                 "Uses three repetitions with explicit 5 to 8 minute recoveries.",
+                (
+                    "Searches work-block starts from minute 20 through minute "
+                    "180 so later repetitions are representable."
+                ),
                 (
                     "Adds no hidden surface, gradient, elevation, power-zone "
                     "or interruption thresholds."
@@ -103,6 +111,8 @@ def resolve_cycling_training_profile(
         training_repetitions=1,
         recovery_min_minutes=None,
         recovery_max_minutes=None,
+        training_start_time_min_minutes=20.0,
+        training_start_time_max_minutes=30.0,
         ranking_intent=(
             "Use the existing deterministic climbing-oriented window ranking, "
             "then warmup, cooldown, route quality and target fit."

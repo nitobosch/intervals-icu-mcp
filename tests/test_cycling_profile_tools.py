@@ -52,6 +52,8 @@ async def test_profiled_route_delegates_resolved_parameters(
     assert kwargs["start_location"] == "39.59,2.63"
     assert kwargs["target_distance_km"] == 50.0
     assert kwargs["target_duration_minutes"] == 120.0
+    assert kwargs["training_start_time_min_minutes"] == 20.0
+    assert kwargs["training_start_time_max_minutes"] == 30.0
     assert kwargs["training_durations_minutes"] == [35.0]
     assert kwargs["training_repetitions"] == 1
     assert kwargs["recovery_min_minutes"] is None
@@ -154,6 +156,8 @@ async def test_sweet_spot_profile_delegates_multiblock_structure(
     assert kwargs["training_repetitions"] == 3
     assert kwargs["recovery_min_minutes"] == 5.0
     assert kwargs["recovery_max_minutes"] == 8.0
+    assert kwargs["training_start_time_min_minutes"] == 20.0
+    assert kwargs["training_start_time_max_minutes"] == 180.0
     profile = json.loads(result)["data"]["training_profile"]
     assert profile["profile"] == "sweet_spot_climb"
     assert profile["hard_constraints_applied"] == []

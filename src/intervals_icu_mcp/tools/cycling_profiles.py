@@ -81,6 +81,12 @@ async def find_profiled_cycling_training_route(
         recovery_min_minutes=resolution.recovery_min_minutes,
         recovery_max_minutes=resolution.recovery_max_minutes,
         candidate_count=candidate_count,
+        training_start_time_min_minutes=(
+            resolution.training_start_time_min_minutes
+        ),
+        training_start_time_max_minutes=(
+            resolution.training_start_time_max_minutes
+        ),
         avoid_features=avoid_features,
         departure_time=departure_time,
         ctx=ctx,
