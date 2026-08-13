@@ -65,6 +65,7 @@ from .tools.custom_items import (
     get_custom_items,
     update_custom_item,
 )
+from .tools.cycling_coach import find_cycling_coach_route
 from .tools.cycling_profiles import find_profiled_cycling_training_route
 from .tools.event_management import (
     apply_training_plan,
@@ -141,6 +142,16 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(find_profiled_cycling_training_route)
+
+mcp.tool(
+    name="icu_find_cycling_coach_route",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(find_cycling_coach_route)
 
 
 # Register direct Strava tools
