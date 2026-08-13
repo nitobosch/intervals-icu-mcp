@@ -3802,6 +3802,7 @@ async def find_cycling_training_route_candidates(
     requirements: RouteTrainingWindowRequirements | None = None,
     session_requirements: CyclingSessionRequirements | None = None,
     training_block_spec: TrainingBlockSpec | None = None,
+    avoid_features: tuple[str, ...] = (),
 ) -> CyclingRouteCandidateSearchResult:
     """Generate, evaluate and rank cycling training route candidates."""
 
@@ -3816,6 +3817,7 @@ async def find_cycling_training_route_candidates(
             max_distance_deviation_percentage
         ),
         target_duration_s=target_duration_s,
+        avoid_features=avoid_features,
     )
     candidates_after_distance_filter = len(candidates)
     if target_duration_s is not None:
@@ -4409,6 +4411,10 @@ async def find_cycling_training_route(
         float,
         "Maximum point distance counted as overlapping geometry.",
     ] = 50.0,
+    avoid_features: Annotated[
+        list[Literal["ferries", "fords", "steps"]] | None,
+        "ORS cycling features to avoid natively; null avoids none.",
+    ] = None,
     country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
     focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
     focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,
@@ -4485,6 +4491,7 @@ async def find_cycling_training_route(
         )
 
     candidate_durations = training_durations_minutes or [20.0, 30.0, 40.0]
+    cycling_avoid_features = tuple(avoid_features or ())
 
     validation_error: str | None = None
     if not start_location.strip():
@@ -4542,6 +4549,7 @@ async def find_cycling_training_route(
 
     if validation_error is None:
         try:
+            validate_cycling_avoid_features(cycling_avoid_features)
             deduplicate_cycling_route_candidates(
                 (),
                 overlap_threshold_percentage=(
@@ -4693,6 +4701,7 @@ async def find_cycling_training_route(
                 requirements=requirements,
                 session_requirements=session_requirements,
                 training_block_spec=training_block_spec,
+                avoid_features=cycling_avoid_features,
             )
 
         ranked = search_result.ranked
@@ -4755,6 +4764,7 @@ async def find_cycling_training_route(
                     "resample_spacing_m": deduplication_resample_spacing_m,
                     "proximity_m": deduplication_proximity_m,
                 },
+                "avoid_features": list(cycling_avoid_features),
                 "target_distance_kilometers": target_distance_km,
                 "target_duration_minutes": target_duration_minutes,
                 "gpx_included": include_gpx,

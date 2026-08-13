@@ -4019,6 +4019,7 @@ async def test_find_cycling_training_route_candidates_orchestrates_pipeline(
         seed_start=0,
         max_distance_deviation_percentage=50.0,
         target_duration_s=None,
+        avoid_features=(),
     )
     evaluate.assert_called_once_with(
         deduplicated,
@@ -4943,6 +4944,33 @@ async def test_find_cycling_training_route_validates_duration_before_ors(
     assert "target_duration_minutes" in response["error"]["message"]
 
 
+async def test_find_cycling_training_route_validates_avoid_features_before_ors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    import intervals_icu_mcp.tools.routing as routing
+
+    class UnexpectedClient:
+        def __init__(self, _config: ICUConfig) -> None:
+            raise AssertionError("ORS client must not be created")
+
+    monkeypatch.setattr(routing, "OpenRouteServiceClient", UnexpectedClient)
+    ctx = SimpleNamespace(get_state=AsyncMock(return_value=_config()))
+
+    result = await routing.find_cycling_training_route(
+        start_location="Start",
+        target_distance_km=50.0,
+        avoid_features=["steps", "steps"],
+        ctx=ctx,
+    )
+
+    response = json.loads(result)
+    assert response["error"]["type"] == "validation_error"
+    assert "duplicates" in response["error"]["message"]
+
+
 async def test_find_cycling_training_route_validates_multiblock_duration_before_ors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5042,6 +5070,7 @@ async def test_find_cycling_training_route_success(
         recovery_max_minutes=10.0,
         candidate_count=2,
         max_duration_deviation_percentage=20.0,
+        avoid_features=["ferries", "fords", "steps"],
         include_gpx=True,
         max_warmup_maneuvers_per_hour=8.0,
         ctx=ctx,
@@ -5071,6 +5100,11 @@ async def test_find_cycling_training_route_success(
     assert response["metadata"]["target_duration_minutes"] == 90.0
     assert response["metadata"]["max_duration_deviation_percentage"] == 20.0
     assert response["metadata"]["gpx_included"] is True
+    assert response["metadata"]["avoid_features"] == [
+        "ferries",
+        "fords",
+        "steps",
+    ]
     assert response["metadata"]["training_block_spec"] == {
         "work_duration_s": 1800.0,
         "repetitions": 3,
@@ -5093,6 +5127,11 @@ async def test_find_cycling_training_route_success(
     search.assert_awaited_once()
     assert search.await_args.kwargs["target_distance_m"] == 50_000.0
     assert search.await_args.kwargs["durations_s"] == (1800.0,)
+    assert search.await_args.kwargs["avoid_features"] == (
+        "ferries",
+        "fords",
+        "steps",
+    )
     assert search.await_args.kwargs["training_block_spec"] == TrainingBlockSpec(
         work_duration_s=1800.0,
         repetitions=3,
