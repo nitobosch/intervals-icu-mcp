@@ -67,6 +67,7 @@ from .tools.custom_items import (
 )
 from .tools.cycling_coach import find_cycling_coach_route
 from .tools.cycling_profiles import find_profiled_cycling_training_route
+from .tools.cycling_route_builder import build_ordered_cycling_route
 from .tools.event_management import (
     apply_training_plan,
     bulk_create_events,
@@ -111,6 +112,16 @@ from .tools.wellness import (
     update_wellness,
 )
 from .tools.workout_library import get_workout_library, get_workouts_in_folder
+
+mcp.tool(
+    name="icu_build_cycling_route",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(build_ordered_cycling_route)
 
 # Register routing tools
 mcp.tool(
