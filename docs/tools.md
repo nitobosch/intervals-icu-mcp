@@ -250,6 +250,49 @@ Arbitrary avoid-area polygons are not exposed. Supporting them safely would
 require additional GeoJSON topology, area, extent, and route-distance validation;
 the current feature list covers the native low-complexity cycling restrictions.
 
+Optional origin-level weather and daylight context is enabled by passing
+`departure_time` as an ISO 8601 datetime with an explicit UTC offset. The route
+is generated and ranked normally, then Open-Meteo is queried for the origin and
+the estimated duration of the best route:
+
+```json
+{
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 30,
+  "training_durations_minutes": [20],
+  "departure_time": "2026-08-14T08:00:00+02:00"
+}
+```
+
+The top-level `data.external_context` reports:
+
+- the Open-Meteo source and CC BY 4.0 attribution
+- the origin timezone, local departure, and estimated finish
+- forecast hours sampled for auditability
+- minimum/maximum temperature and apparent temperature
+- maximum precipitation probability and summed precipitation
+- maximum wind speed and gusts, wind directions, and WMO weather codes
+- sunrise, sunset, and whether the estimated ride is entirely in daylight
+- factual warnings for forecast precipitation, thunderstorm codes, departure
+  before sunrise, or estimated finish after sunset
+
+No wind or temperature threshold is invented. Weather and daylight are
+informational: they do not change route eligibility or ranking. If Open-Meteo
+is unavailable or its response cannot cover the route interval, the route is
+still returned with `external_context.available=false` and the
+`forecast_unavailable` warning. Omitting `departure_time` avoids the weather
+request entirely and returns `external_context=null`.
+
+`OPEN_METEO_BASE_URL` optionally overrides the default
+`https://api.open-meteo.com`. The default free endpoint is intended for
+non-commercial use and its data requires Open-Meteo attribution.
+
+This MVP deliberately does not estimate weather per route segment or relative
+headwind, because that requires a temporal and directional model along the
+geometry. Civil twilight is also not inferred from arbitrary local thresholds,
+and live traffic or road closures are not claimed without a reliable data
+source. These omissions keep the returned context explicit and auditable.
+
 For example, a client can request a 30 km route with a 20-minute block starting
 10–15 minutes after departure, at most 8 warmup maneuvers per hour, and no more
 than 300 m/h of climbing during cooldown:
