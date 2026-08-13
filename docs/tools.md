@@ -294,8 +294,8 @@ geometry. Civil twilight is also not inferred from arbitrary local thresholds,
 and live traffic or road closures are not claimed without a reliable data
 source. These omissions keep the returned context explicit and auditable.
 
-The high-level profiled tool currently supports `steady_climb`. It is a thin
-translation layer over `icu_find_cycling_training_route`, not a separate
+The high-level profiled tool supports `steady_climb` and
+`sweet_spot_climb`. It is a thin translation layer over `icu_find_cycling_training_route`, not a separate
 routing or ranking implementation:
 
 ```json
@@ -319,6 +319,29 @@ weather, GPX, or serialization. The response includes
 `data.training_profile` with the resolved parameters, ranking intent, hard
 constraints applied, and rationale. This makes the high-level translation
 auditable while preserving access to the lower-level tool for advanced callers.
+
+`sweet_spot_climb` uses the existing multi-block engine. By default it requests
+3 × 12 minute climbing work blocks separated by recoveries of 5–8 minutes:
+
+```json
+{
+  "profile": "sweet_spot_climb",
+  "start_location": "39.589985,2.630108",
+  "target_distance_km": 60,
+  "departure_time": "2026-08-14T08:00:00+02:00"
+}
+```
+
+Passing `work_duration_minutes` changes the duration of each of the three work
+blocks. The response exposes all resolved values in `data.training_profile`.
+Ranking remains deterministic and considers the weakest block first, followed
+by consistency, climbing balance, interruptions, recovery quality, and start
+time.
+
+The name describes the intended workout structure, not power-zone enforcement:
+routing data does not contain the athlete's executed power. Consequently the
+profile does not invent a power threshold or silently reject roads using
+surface, gradient, elevation, or interruption thresholds.
 
 For example, a client can request a 30 km route with a 20-minute block starting
 10–15 minutes after departure, at most 8 warmup maneuvers per hour, and no more
