@@ -38,6 +38,9 @@ class ICUConfig(BaseSettings):
     openrouteservice_api_key: str = ""
     openrouteservice_base_url: str = "https://api.openrouteservice.org"
 
+    # Optional Open-Meteo integration for route weather and daylight context.
+    open_meteo_base_url: str = "https://api.open-meteo.com"
+
     @field_validator("intervals_icu_delete_mode", mode="before")
     @classmethod
     def _normalize_delete_mode(cls, v: object) -> str:
