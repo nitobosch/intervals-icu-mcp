@@ -7,11 +7,17 @@ import math
 import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
 from fastmcp import Context
 
 from ..auth import ICUConfig
+from ..cycling_forecast import (
+    build_cycling_forecast_context,
+    parse_aware_datetime,
+)
+from ..open_meteo_client import OpenMeteoAPIError, OpenMeteoClient
 from ..openrouteservice_client import (
     OpenRouteServiceAPIError,
     OpenRouteServiceClient,
@@ -4415,6 +4421,10 @@ async def find_cycling_training_route(
         list[Literal["ferries", "fords", "steps"]] | None,
         "ORS cycling features to avoid natively; null avoids none.",
     ] = None,
+    departure_time: Annotated[
+        str | None,
+        "Planned departure as ISO 8601 with UTC offset; enables forecast context.",
+    ] = None,
     country: Annotated[str | None, "Optional ISO country code for geocoding."] = None,
     focus_longitude: Annotated[float | None, "Optional geocoding focus longitude."] = None,
     focus_latitude: Annotated[float | None, "Optional geocoding focus latitude."] = None,
@@ -4492,6 +4502,7 @@ async def find_cycling_training_route(
 
     candidate_durations = training_durations_minutes or [20.0, 30.0, 40.0]
     cycling_avoid_features = tuple(avoid_features or ())
+    planned_departure: datetime | None = None
 
     validation_error: str | None = None
     if not start_location.strip():
@@ -4546,6 +4557,11 @@ async def find_cycling_training_route(
         validation_error = (
             "max_duration_deviation_percentage must not be negative."
         )
+    if validation_error is None and departure_time is not None:
+        try:
+            planned_departure = parse_aware_datetime(departure_time)
+        except ValueError as exc:
+            validation_error = str(exc)
 
     if validation_error is None:
         try:
@@ -4715,6 +4731,39 @@ async def find_cycling_training_route(
             serialize_cycling_route_candidate_analysis(analysis)
             for analysis in ranked
         ]
+        external_context: dict[str, Any] | None = None
+        if planned_departure is not None:
+            best_duration_s = ranked[0].candidate.route.duration_s
+            forecast_start_date = (
+                planned_departure - timedelta(days=1)
+            ).date()
+            forecast_end_date = (
+                planned_departure
+                + timedelta(seconds=best_duration_s, days=1)
+            ).date()
+            try:
+                async with OpenMeteoClient(config) as weather_client:
+                    forecast_payload = await weather_client.forecast(
+                        origin.latitude,
+                        origin.longitude,
+                        start_date=forecast_start_date,
+                        end_date=forecast_end_date,
+                    )
+                forecast_context = build_cycling_forecast_context(
+                    forecast_payload,
+                    departure_time=planned_departure,
+                    route_duration_s=best_duration_s,
+                )
+                external_context = {
+                    "available": True,
+                    **asdict(forecast_context),
+                }
+            except (OpenMeteoAPIError, ValueError) as exc:
+                external_context = {
+                    "available": False,
+                    "warnings": ["forecast_unavailable"],
+                    "error": str(exc),
+                }
         if include_gpx:
             best_analysis = ranked[0]
             block_sequence = best_analysis.best_training_block_sequence
@@ -4742,6 +4791,7 @@ async def find_cycling_training_route(
                 "origin": asdict(origin),
                 "best_route": serialized[0],
                 "alternatives": serialized[1:],
+                "external_context": external_context,
             },
             metadata={
                 "profile": "cycling-road",
@@ -4765,6 +4815,7 @@ async def find_cycling_training_route(
                     "proximity_m": deduplication_proximity_m,
                 },
                 "avoid_features": list(cycling_avoid_features),
+                "departure_time_requested": departure_time,
                 "target_distance_kilometers": target_distance_km,
                 "target_duration_minutes": target_duration_minutes,
                 "gpx_included": include_gpx,
