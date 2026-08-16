@@ -164,6 +164,52 @@ def _format_effort(effort: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _format_activity_starred_effort(
+    effort: dict[str, Any],
+    *,
+    strava_activity_id: str,
+) -> dict[str, Any] | None:
+    """Format one activity effort and retain its official segment identity."""
+
+    segment = _as_dict(effort.get("segment"))
+
+    if segment is None:
+        return None
+
+    segment_id = _strava_id(segment.get("id"))
+
+    if segment_id is None:
+        return None
+
+    result = _format_effort(effort)
+    if result["name"] is None:
+        result["name"] = segment.get("name")
+
+    result["segment_id"] = segment_id
+
+    if result["activity_id"] is None:
+        result["activity_id"] = strava_activity_id
+
+    result["segment"] = _format_segment(segment)
+    return result
+
+
+def _effort_order_key(effort: dict[str, Any]) -> tuple[float, float, str, str]:
+    """Return a deterministic activity-order key for a formatted effort."""
+
+    def index_value(value: Any) -> float:
+        if isinstance(value, int | float):
+            return float(value)
+        return float("inf")
+
+    return (
+        index_value(effort.get("start_index")),
+        index_value(effort.get("end_index")),
+        str(effort.get("segment_id") or ""),
+        str(effort.get("effort_id") or ""),
+    )
+
+
 def _numeric_stream(streams: dict[str, Any], name: str) -> list[float]:
     """Return numeric values for one stream."""
 
@@ -365,6 +411,114 @@ async def get_starred_segments(
                 },
                 query_type="strava_starred_segments",
             )
+
+    except StravaAPIError as e:
+        return ResponseBuilder.build_error_response(
+            e.message,
+            error_type="strava_api_error",
+        )
+    except Exception as e:
+        return ResponseBuilder.build_error_response(
+            f"Unexpected Strava integration error: {e}",
+            error_type="internal_error",
+        )
+
+
+async def get_starred_segments_in_activity(
+    strava_activity_id: Annotated[
+        str,
+        "Strava activity ID (not an Intervals.icu activity ID).",
+    ],
+    ctx: Context | None = None,
+) -> str:
+    """Return starred Strava segment efforts present in one activity.
+
+    Matching uses only official Strava segment IDs from the detailed activity
+    and the authenticated athlete's starred segment list. No GPS matching or
+    per-segment effort queries are performed.
+    """
+
+    assert ctx is not None
+    config: ICUConfig = await ctx.get_state("config")
+    activity_id = strava_activity_id.strip()
+
+    if not activity_id:
+        return ResponseBuilder.build_error_response(
+            "strava_activity_id must not be empty.",
+            error_type="validation_error",
+        )
+
+    try:
+        async with StravaClient(config) as client:
+            if not client.configured:
+                return ResponseBuilder.build_error_response(
+                    "Direct Strava integration is not configured.",
+                    error_type="configuration_error",
+                )
+
+            activity = await client.get_activity(
+                activity_id,
+                include_all_efforts=True,
+            )
+            starred_segments = await client.get_starred_segments()
+
+        starred_ids = {
+            segment_id
+            for segment in starred_segments
+            if (segment_id := _strava_id(segment.get("id"))) is not None
+        }
+        raw_efforts = _as_list(activity.get("segment_efforts")) or []
+        efforts: list[dict[str, Any]] = []
+
+        for raw_effort in raw_efforts:
+            effort = _as_dict(raw_effort)
+
+            if effort is None:
+                continue
+
+            segment = _as_dict(effort.get("segment"))
+            segment_id = (
+                _strava_id(segment.get("id"))
+                if segment is not None
+                else None
+            )
+
+            if segment_id not in starred_ids:
+                continue
+
+            formatted = _format_activity_starred_effort(
+                effort,
+                strava_activity_id=activity_id,
+            )
+
+            if formatted is not None:
+                efforts.append(formatted)
+
+        efforts.sort(key=_effort_order_key)
+        ridden_starred_ids = {
+            str(effort["segment_id"])
+            for effort in efforts
+        }
+
+        return ResponseBuilder.build_response(
+            data={
+                "source": "strava",
+                "activity_id": activity_id,
+                "starred_segment_count": len(ridden_starred_ids),
+                "effort_count": len(efforts),
+                "efforts": efforts,
+            },
+            metadata={
+                "read_only": True,
+                "ids_are_strings": True,
+                "matching": "official_strava_segment_id_intersection",
+                "power_semantics": {
+                    "device": "measured by a recording device/power meter",
+                    "strava_estimate": "estimated by Strava; not measured power",
+                },
+            },
+            query_type="strava_starred_segments_in_activity",
+        )
 
     except StravaAPIError as e:
         return ResponseBuilder.build_error_response(

@@ -104,6 +104,7 @@ from .tools.strava import (
     get_segment_effort_streams,
     get_segment_efforts,
     get_starred_segments,
+    get_starred_segments_in_activity,
 )
 from .tools.wellness import (
     get_recovery_analysis,
@@ -176,6 +177,16 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(get_starred_segments)
+
+mcp.tool(
+    name="strava_get_starred_segments_in_activity",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_starred_segments_in_activity)
 
 
 mcp.tool(

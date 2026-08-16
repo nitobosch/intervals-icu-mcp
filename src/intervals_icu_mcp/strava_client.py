@@ -273,6 +273,31 @@ class StravaClient:
         payload: Any = response.json()
         return payload
 
+    async def get_activity(
+        self,
+        strava_activity_id: str,
+        *,
+        include_all_efforts: bool = True,
+    ) -> dict[str, Any]:
+        """Return one detailed Strava activity with optional segment efforts."""
+
+        result = await self._request(
+            "GET",
+            f"/activities/{strava_activity_id}",
+            params={
+                "include_all_efforts": (
+                    "true" if include_all_efforts else "false"
+                )
+            },
+        )
+
+        if not isinstance(result, dict):
+            raise StravaAPIError(
+                f"Unexpected response from /activities/{strava_activity_id}."
+            )
+
+        return cast(dict[str, Any], result)
+
     async def get_starred_segments(
         self,
         *,

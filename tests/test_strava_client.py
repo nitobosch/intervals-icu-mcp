@@ -80,6 +80,33 @@ async def test_refresh_persists_rotated_token_with_secure_permissions(tmp_path):
     assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
 
 
+async def test_get_activity_requests_all_segment_efforts(tmp_path):
+    config = _config(tmp_path, refresh_token="")
+    _persist_valid_token(config)
+
+    with respx.mock(
+        base_url="https://www.strava.com",
+        assert_all_called=True,
+    ) as router:
+        route = router.get("/api/v3/activities/9007199254740993").mock(
+            return_value=Response(
+                200,
+                json={"id": 9007199254740993, "segment_efforts": []},
+            )
+        )
+
+        async with StravaClient(config) as client:
+            activity = await client.get_activity(
+                "9007199254740993",
+                include_all_efforts=True,
+            )
+
+    assert activity["id"] == 9007199254740993
+    assert route.call_count == 1
+    request = route.calls[0].request
+    assert request.url.params["include_all_efforts"] == "true"
+
+
 async def test_persisted_token_works_without_environment_refresh_token(tmp_path):
     config = _config(tmp_path, refresh_token="")
     _persist_valid_token(config)
