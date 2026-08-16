@@ -11,6 +11,20 @@ from ..response_builder import ResponseBuilder
 from ._strava import strava_limitation_note
 
 
+def _activity_source_references(activity: Any) -> dict[str, str]:
+    """Expose source identifiers without inferring cross-platform mappings."""
+
+    references: dict[str, str] = {}
+
+    if activity.source:
+        references["source"] = activity.source
+
+    if activity.strava_id:
+        references["strava_activity_id"] = activity.strava_id
+
+    return references
+
+
 def _summarize_activity(activity: Any) -> dict[str, Any]:
     """Build a LIGHT summary dict for one activity.
 
@@ -23,6 +37,8 @@ def _summarize_activity(activity: Any) -> dict[str, Any]:
         "start_date": activity.start_date_local,
         "type": activity.type,
     }
+
+    item.update(_activity_source_references(activity))
 
     if activity.distance:
         item["distance_meters"] = activity.distance
@@ -175,6 +191,8 @@ async def get_activity_details(
                 "type": activity.type,
                 "start_date": activity.start_date_local,
             }
+
+            activity_data.update(_activity_source_references(activity))
 
             if activity.description:
                 activity_data["description"] = activity.description

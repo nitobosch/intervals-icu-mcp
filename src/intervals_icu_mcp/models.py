@@ -170,7 +170,15 @@ class ActivitySummary(BaseModel):
     icu_training_load: int | None = None
     icu_intensity: float | None = None
     source: str | None = None
+    strava_id: str | None = None
     note: str | None = Field(default=None, alias="_note")
+
+    @field_validator("strava_id", mode="before")
+    @classmethod
+    def _coerce_strava_id(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(value)
 
 
 class Activity(ActivitySummary):
