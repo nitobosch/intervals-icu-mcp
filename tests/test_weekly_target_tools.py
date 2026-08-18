@@ -200,23 +200,32 @@ class TestWeeklyTargetConfirmation:
     async def test_create_uses_minimal_payload_then_verifies(self, mock_config, respx_mock):
         _mock_reads(respx_mock, [])
         post = respx_mock.post("/athlete/i123456/events").mock(
-            return_value=Response(200, json=_target(load=300, time=None, distance=None))
+            return_value=Response(200, json=_target(load=300, time=21600, distance=180000))
         )
         get = respx_mock.get("/athlete/i123456/events/9001").mock(
-            return_value=Response(200, json=_target(load=300, time=None, distance=None))
+            return_value=Response(200, json=_target(load=300, time=21600, distance=180000))
         )
         result = json.loads(
             await set_weekly_sport_target(
-                "Ride", WEEK, load_target=300, confirm=True, ctx=_ctx(mock_config)
+                "Ride",
+                WEEK,
+                load_target=300,
+                time_target_minutes=360,
+                distance_target_km=180,
+                confirm=True,
+                ctx=_ctx(mock_config),
             )
         )
         payload = json.loads(post.calls[0].request.content)
         assert payload == {
             "category": "TARGET",
             "type": "Ride",
+            "name": "Weekly",
             "for_week": True,
             "start_date_local": "2026-08-24T00:00:00",
             "load_target": 300,
+            "time_target": 21600,
+            "distance_target": 180000,
         }
         assert payload["start_date_local"].endswith("T00:00:00")
         assert "Z" not in payload["start_date_local"]
@@ -229,7 +238,7 @@ class TestWeeklyTargetConfirmation:
         assert result["data"]["week_start_date"] == WEEK
         assert result["data"]["verified"] is True
 
-    async def test_update_is_partial_and_preserves_unmanaged_fields(
+    async def test_update_matches_other_name_and_preserves_unmanaged_fields(
         self, mock_config, respx_mock
     ):
         _mock_reads(respx_mock, [_target()])
@@ -244,7 +253,9 @@ class TestWeeklyTargetConfirmation:
                 "Ride", WEEK, load_target=320, confirm=True, ctx=_ctx(mock_config)
             )
         )
-        assert json.loads(put.calls[0].request.content) == {"load_target": 320}
+        update_payload = json.loads(put.calls[0].request.content)
+        assert update_payload == {"load_target": 320}
+        assert "name" not in update_payload
         assert result["data"]["time_target_minutes"] == 300
         assert result["data"]["distance_target_km"] == 120
 

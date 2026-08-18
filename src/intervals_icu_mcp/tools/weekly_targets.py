@@ -204,6 +204,7 @@ async def set_weekly_sport_target(
                 create_payload: dict[str, Any] = {
                     "category": "TARGET",
                     "type": sport_type,
+                    "name": "Weekly",
                     "for_week": True,
                     "start_date_local": f"{week_start.isoformat()}T00:00:00",
                     **requested_api,
