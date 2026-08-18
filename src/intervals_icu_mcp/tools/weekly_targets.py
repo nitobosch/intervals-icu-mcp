@@ -254,3 +254,111 @@ async def set_weekly_sport_target(
         return ResponseBuilder.build_error_response(str(exc), error_type="verification_error")
     except Exception as exc:
         return ResponseBuilder.build_error_response(str(exc), error_type="internal_error")
+
+
+async def delete_weekly_sport_target(
+    sport_type: Annotated[str, "Exact native sport type from the athlete's sport settings"],
+    week_start_date: Annotated[str, "Monday in ISO YYYY-MM-DD format"],
+    confirm: Annotated[bool, "False previews only; true deletes and verifies"] = False,
+    athlete_id: Annotated[str | None, "Athlete ID (for coaches managing multiple athletes)"] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Preview or delete exactly one native weekly TARGET for a configured sport."""
+    assert ctx is not None
+    config: ICUConfig = await ctx.get_state("config")
+
+    try:
+        week_start = _parse_week_start(week_start_date)
+    except ValueError as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="validation_error")
+
+    try:
+        async with ICUClient(config) as client:
+            settings = await client.get_sport_settings(athlete_id=athlete_id)
+            available = _available_sport_types(settings)
+            if sport_type not in available:
+                return ResponseBuilder.build_error_response(
+                    f"Invalid sport_type {sport_type!r}. Available native types: {', '.join(available)}",
+                    error_type="validation_error",
+                )
+
+            events = await client.get_events(
+                athlete_id=athlete_id,
+                oldest=week_start.isoformat(),
+                newest=week_start.isoformat(),
+            )
+            matches = _matching_targets(events, sport_type, week_start)
+            if len(matches) > 1:
+                return ResponseBuilder.build_error_response(
+                    "Multiple weekly TARGET events exist for this week and sport; refusing to choose one",
+                    error_type="conflict_error",
+                )
+
+            existing = matches[0] if matches else None
+            if existing is None:
+                return ResponseBuilder.build_response(
+                    {
+                        "week_start_date": week_start.isoformat(),
+                        "sport_type": sport_type,
+                        "target_id": None,
+                        "action": "not_found",
+                        "requires_confirmation": False,
+                        **({"verified": True} if confirm else {}),
+                    },
+                    metadata={
+                        "write": False,
+                        "delete": True,
+                        "preview": not confirm,
+                        "source": "intervals.icu",
+                    },
+                )
+
+            if not confirm:
+                return ResponseBuilder.build_response(
+                    {
+                        "week_start_date": week_start.isoformat(),
+                        "sport_type": sport_type,
+                        "target_id": str(existing.id),
+                        "current": _managed_state(existing),
+                        "action": "delete",
+                        "requires_confirmation": True,
+                    },
+                    metadata={
+                        "write": False,
+                        "delete": True,
+                        "preview": True,
+                        "source": "intervals.icu",
+                    },
+                )
+
+            await client.delete_event(existing.id, athlete_id=athlete_id)
+            remaining_events = await client.get_events(
+                athlete_id=athlete_id,
+                oldest=week_start.isoformat(),
+                newest=week_start.isoformat(),
+            )
+            if _matching_targets(remaining_events, sport_type, week_start):
+                raise ValueError(
+                    "Weekly target deletion verification failed: matching target still exists"
+                )
+
+            return ResponseBuilder.build_response(
+                {
+                    "week_start_date": week_start.isoformat(),
+                    "sport_type": sport_type,
+                    "target_id": str(existing.id),
+                    "action": "deleted",
+                    "verified": True,
+                },
+                metadata={
+                    "write": True,
+                    "delete": True,
+                    "source": "intervals.icu",
+                },
+            )
+    except ICUAPIError as exc:
+        return ResponseBuilder.build_error_response(exc.message, error_type="api_error")
+    except ValueError as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="verification_error")
+    except Exception as exc:
+        return ResponseBuilder.build_error_response(str(exc), error_type="internal_error")

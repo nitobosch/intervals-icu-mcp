@@ -106,7 +106,7 @@ from .tools.strava import (
     get_starred_segments,
     get_starred_segments_in_activity,
 )
-from .tools.weekly_targets import set_weekly_sport_target
+from .tools.weekly_targets import delete_weekly_sport_target, set_weekly_sport_target
 from .tools.wellness import (
     get_recovery_analysis,
     get_wellness_data,
@@ -538,6 +538,16 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(set_weekly_sport_target)
+if _DELETE_MODE in ("safe", "full"):
+    mcp.tool(
+        name="icu_delete_weekly_sport_target",
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )(delete_weekly_sport_target)
 mcp.tool(
     name="icu_create_event",
     annotations={

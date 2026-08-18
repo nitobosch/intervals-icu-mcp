@@ -9,6 +9,7 @@ from httpx import Response
 from intervals_icu_mcp.models import SportSettings
 from intervals_icu_mcp.tools.weekly_targets import (
     _target_values_to_api,
+    delete_weekly_sport_target,
     set_weekly_sport_target,
 )
 
@@ -34,10 +35,11 @@ def _target(
     load: int | None = 280,
     time: int | None = 18000,
     distance: float | None = 120000,
+    start_date_local: str = f"{WEEK}T00:00:00",
 ) -> dict:
     return {
         "id": event_id,
-        "start_date_local": f"{WEEK}T00:00:00",
+        "start_date_local": start_date_local,
         "category": "TARGET",
         "type": sport,
         "for_week": for_week,
@@ -292,6 +294,216 @@ class TestWeeklyTargetConfirmation:
         result = json.loads(
             await set_weekly_sport_target(
                 "Run", WEEK, load_target=100, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["error"]["type"] == "api_error"
+
+
+class TestDeleteWeeklySportTarget:
+    async def test_preview_finds_realistic_ride_target_without_delete(
+        self, mock_config, respx_mock
+    ):
+        _mock_reads(
+            respx_mock,
+            [_target(130144219, load=300, time=21600, distance=180000)],
+        )
+        result = json.loads(
+            await delete_weekly_sport_target("Ride", WEEK, ctx=_ctx(mock_config))
+        )
+        assert result["data"] == {
+            "week_start_date": WEEK,
+            "sport_type": "Ride",
+            "target_id": "130144219",
+            "current": {
+                "load_target": 300,
+                "time_target_minutes": 360,
+                "distance_target_km": 180,
+            },
+            "action": "delete",
+            "requires_confirmation": True,
+        }
+        assert result["metadata"]["write"] is False
+        assert len(respx_mock.calls) == 2
+
+    async def test_confirm_deletes_exact_target_and_verifies_disappearance(
+        self, mock_config, respx_mock
+    ):
+        respx_mock.get("/athlete/i123456/sport-settings").mock(
+            return_value=Response(200, json=SPORT_SETTINGS)
+        )
+        events = respx_mock.get("/athlete/i123456/events").mock(
+            side_effect=[
+                Response(200, json=[_target(130144219)]),
+                Response(200, json=[]),
+            ]
+        )
+        delete = respx_mock.delete("/athlete/i123456/events/130144219").mock(
+            return_value=Response(204)
+        )
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert delete.call_count == 1
+        assert events.call_count == 2
+        assert result["data"] == {
+            "week_start_date": WEEK,
+            "sport_type": "Ride",
+            "target_id": "130144219",
+            "action": "deleted",
+            "verified": True,
+        }
+        assert result["metadata"]["write"] is True
+
+    async def test_repeated_confirm_is_idempotent(self, mock_config, respx_mock):
+        respx_mock.get("/athlete/i123456/sport-settings").mock(
+            return_value=Response(200, json=SPORT_SETTINGS)
+        )
+        respx_mock.get("/athlete/i123456/events").mock(
+            side_effect=[
+                Response(200, json=[_target(130144219)]),
+                Response(200, json=[]),
+                Response(200, json=[]),
+            ]
+        )
+        delete = respx_mock.delete("/athlete/i123456/events/130144219").mock(
+            return_value=Response(204)
+        )
+        first = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        second = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert first["data"]["action"] == "deleted"
+        assert second["data"]["action"] == "not_found"
+        assert second["data"]["verified"] is True
+        assert delete.call_count == 1
+
+    async def test_not_found_is_success_without_delete(self, mock_config, respx_mock):
+        _mock_reads(respx_mock, [])
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Run", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["data"]["action"] == "not_found"
+        assert result["data"]["requires_confirmation"] is False
+        assert result["data"]["verified"] is True
+        assert len(respx_mock.calls) == 2
+
+    async def test_structurally_unrelated_events_are_never_deleted(
+        self, mock_config, respx_mock
+    ):
+        events = [
+            _target(1, for_week=False),
+            _target(2, sport="Swim"),
+            _target(3, start_date_local="2026-08-31T00:00:00"),
+            {
+                "id": 4,
+                "start_date_local": f"{WEEK}T00:00:00",
+                "category": "WORKOUT",
+                "type": "Ride",
+                "for_week": True,
+            },
+        ]
+        _mock_reads(respx_mock, events)
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["data"]["action"] == "not_found"
+        assert len(respx_mock.calls) == 2
+
+    async def test_ride_delete_does_not_delete_swim(self, mock_config, respx_mock):
+        respx_mock.get("/athlete/i123456/sport-settings").mock(
+            return_value=Response(200, json=SPORT_SETTINGS)
+        )
+        swim = _target(2, sport="Swim")
+        respx_mock.get("/athlete/i123456/events").mock(
+            side_effect=[
+                Response(200, json=[_target(1), swim]),
+                Response(200, json=[swim]),
+            ]
+        )
+        delete = respx_mock.delete("/athlete/i123456/events/1").mock(
+            return_value=Response(204)
+        )
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["data"]["action"] == "deleted"
+        assert delete.called
+
+    async def test_swim_delete_does_not_delete_ride(self, mock_config, respx_mock):
+        respx_mock.get("/athlete/i123456/sport-settings").mock(
+            return_value=Response(200, json=SPORT_SETTINGS)
+        )
+        ride = _target(1)
+        respx_mock.get("/athlete/i123456/events").mock(
+            side_effect=[
+                Response(200, json=[ride, _target(2, sport="Swim")]),
+                Response(200, json=[ride]),
+            ]
+        )
+        delete = respx_mock.delete("/athlete/i123456/events/2").mock(
+            return_value=Response(204)
+        )
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Swim", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["data"]["action"] == "deleted"
+        assert delete.called
+
+    async def test_duplicate_targets_conflict_without_delete(self, mock_config, respx_mock):
+        _mock_reads(respx_mock, [_target(1), _target(2)])
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
+            )
+        )
+        assert result["error"]["type"] == "conflict_error"
+        assert len(respx_mock.calls) == 2
+
+    async def test_invalid_sport_lists_available_types(self, mock_config, respx_mock):
+        respx_mock.get("/athlete/i123456/sport-settings").mock(
+            return_value=Response(200, json=SPORT_SETTINGS)
+        )
+        result = json.loads(
+            await delete_weekly_sport_target("ride", WEEK, ctx=_ctx(mock_config))
+        )
+        assert result["error"]["type"] == "validation_error"
+        assert "GravelRide" in result["error"]["message"]
+        assert len(respx_mock.calls) == 1
+
+    async def test_non_monday_is_rejected_before_api(self, mock_config, respx_mock):
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", "2026-08-25", ctx=_ctx(mock_config)
+            )
+        )
+        assert "Monday" in result["error"]["message"]
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize("status", [401, 500])
+    async def test_delete_api_error_is_reported(self, mock_config, respx_mock, status):
+        _mock_reads(respx_mock, [_target(1)])
+        respx_mock.delete("/athlete/i123456/events/1").mock(
+            return_value=Response(status, json={})
+        )
+        result = json.loads(
+            await delete_weekly_sport_target(
+                "Ride", WEEK, confirm=True, ctx=_ctx(mock_config)
             )
         )
         assert result["error"]["type"] == "api_error"
