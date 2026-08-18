@@ -106,6 +106,7 @@ from .tools.strava import (
     get_starred_segments,
     get_starred_segments_in_activity,
 )
+from .tools.weekly_targets import set_weekly_sport_target
 from .tools.wellness import (
     get_recovery_analysis,
     get_wellness_data,
@@ -528,6 +529,15 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(get_annual_training_plan)
+mcp.tool(
+    name="icu_set_weekly_sport_target",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(set_weekly_sport_target)
 mcp.tool(
     name="icu_create_event",
     annotations={

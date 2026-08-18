@@ -31,14 +31,15 @@ class TestInMemoryTransport:
             assert client.is_connected()
 
     async def test_all_default_mode_tools_registered(self):
-        """Default safe mode registers 70 tools, including direct Strava analysis."""
+        """Default safe mode registers 71 tools, including weekly targets."""
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            assert len(tools) == 70
+            assert len(tools) == 71
             names = {t.name for t in tools}
             assert "icu_find_profiled_cycling_training_route" in names
             assert "icu_find_cycling_coach_route" in names
             assert "icu_build_cycling_route" in names
+            assert "icu_set_weekly_sport_target" in names
             # Spot-check tools from different modules / tiers
             assert "icu_get_recent_activities" in names
             assert "icu_get_athlete_profile" in names
@@ -230,8 +231,9 @@ class TestHTTPTransport:
                 tools_body = (await tools_resp.aread()).decode()
                 tools_payload = self._parse_sse_response(tools_body)
                 tool_names = {t["name"] for t in tools_payload["result"]["tools"]}
-                assert len(tool_names) == 70
+                assert len(tool_names) == 71
                 assert "strava_get_starred_segments_in_activity" in tool_names
+                assert "icu_set_weekly_sport_target" in tool_names
                 assert "icu_find_profiled_cycling_training_route" in tool_names
                 assert "icu_build_cycling_route" in tool_names
                 assert "icu_find_cycling_coach_route" in tool_names

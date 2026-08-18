@@ -116,6 +116,8 @@ def _week_to_dict(
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
     }
+    if event.type:
+        item["sport_type"] = event.type
     if event.name:
         item["name"] = event.name
     if event.load_target is not None:
@@ -202,8 +204,8 @@ async def get_annual_training_plan(
                 key=lambda e: e.start_date_local,
             )
             target_events = sorted(
-                (e for e in atp_events if e.category == "TARGET"),
-                key=lambda e: e.start_date_local,
+                (e for e in atp_events if e.category == "TARGET" and e.for_week is not False),
+                key=lambda e: (e.start_date_local, e.type or "", e.id),
             )
             note_events = [
                 e for e in atp_events if e.category == "NOTE" and e.plan_applied is not None

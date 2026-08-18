@@ -93,6 +93,7 @@ class TestGetAnnualTrainingPlan:
         assert len(data["weeks"]) == 2
         week1 = data["weeks"][0]
         assert week1["load_target_tss"] == 320
+        assert week1["sport_type"] == "Ride"
         assert week1["time_target_seconds"] == 36000
         assert week1["distance_target_meters"] == 85000
         assert week1["week_end"] == _week_end_date(30)
@@ -116,6 +117,47 @@ class TestGetAnnualTrainingPlan:
         assert data["summary"]["week_count"] == 2
         assert data["summary"]["week_note_count"] == 1
         assert data["summary"]["total_load_target_tss"] == 600
+
+    async def test_multisport_targets_are_distinct_and_conventional_target_is_ignored(
+        self, mock_config, respx_mock
+    ):
+        events = [
+            {
+                "id": 9101,
+                "start_date_local": _date_offset(30),
+                "category": "TARGET",
+                "type": "Ride",
+                "for_week": True,
+                "load_target": 300,
+            },
+            {
+                "id": 9102,
+                "start_date_local": _date_offset(30),
+                "category": "TARGET",
+                "type": "Swim",
+                "for_week": True,
+                "time_target": 7200,
+            },
+            {
+                "id": 9103,
+                "start_date_local": _date_offset(30),
+                "category": "TARGET",
+                "type": "Run",
+                "for_week": False,
+                "load_target": 999,
+            },
+        ]
+        respx_mock.get("/athlete/i123456/events").mock(
+            return_value=Response(200, json=events)
+        )
+        result = json.loads(await get_annual_training_plan(ctx=_make_ctx(mock_config)))
+        weeks = result["data"]["weeks"]
+        assert [(week["sport_type"], week["event_id"]) for week in weeks] == [
+            ("Ride", 9101),
+            ("Swim", 9102),
+        ]
+        assert result["data"]["summary"]["week_count"] == 2
+        assert result["data"]["summary"]["total_load_target_tss"] == 300
 
     async def test_empty(self, mock_config, respx_mock):
         respx_mock.get("/athlete/i123456/events").mock(return_value=Response(200, json=[]))

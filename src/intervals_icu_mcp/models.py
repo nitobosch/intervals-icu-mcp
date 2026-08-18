@@ -40,6 +40,7 @@ class SportSettings(BaseModel):
 
     id: int
     type: str | None = None
+    types: list[str] = Field(default_factory=list)
 
     # Default workout timings
     warmup_time: int | None = None
@@ -312,6 +313,7 @@ class Event(BaseModel):
     name: str | None = None
     description: str | None = None
     type: str | None = None
+    for_week: bool | None = None
     distance: float | None = None
     distance_target: float | None = None
     load_target: int | None = None
