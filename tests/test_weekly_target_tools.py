@@ -183,6 +183,18 @@ class TestWeeklyTargetPreview:
         assert "Monday" in result["error"]["message"]
         assert not respx_mock.calls
 
+    async def test_datetime_input_is_rejected_before_api(self, mock_config, respx_mock):
+        result = json.loads(
+            await set_weekly_sport_target(
+                "Ride",
+                "2026-08-24T00:00:00",
+                load_target=300,
+                ctx=_ctx(mock_config),
+            )
+        )
+        assert "YYYY-MM-DD" in result["error"]["message"]
+        assert not respx_mock.calls
+
 
 class TestWeeklyTargetConfirmation:
     async def test_create_uses_minimal_payload_then_verifies(self, mock_config, respx_mock):
@@ -203,11 +215,18 @@ class TestWeeklyTargetConfirmation:
             "category": "TARGET",
             "type": "Ride",
             "for_week": True,
-            "start_date_local": WEEK,
+            "start_date_local": "2026-08-24T00:00:00",
             "load_target": 300,
         }
+        assert payload["start_date_local"].endswith("T00:00:00")
+        assert "Z" not in payload["start_date_local"]
+        assert "+" not in payload["start_date_local"]
+        search_request = respx_mock.calls[1].request
+        assert search_request.url.params["oldest"] == WEEK
+        assert search_request.url.params["newest"] == WEEK
         assert get.called
         assert result["data"]["action"] == "created"
+        assert result["data"]["week_start_date"] == WEEK
         assert result["data"]["verified"] is True
 
     async def test_update_is_partial_and_preserves_unmanaged_fields(

@@ -205,7 +205,7 @@ async def set_weekly_sport_target(
                     "category": "TARGET",
                     "type": sport_type,
                     "for_week": True,
-                    "start_date_local": week_start.isoformat(),
+                    "start_date_local": f"{week_start.isoformat()}T00:00:00",
                     **requested_api,
                 }
                 created = await client.create_event(create_payload, athlete_id=athlete_id)
